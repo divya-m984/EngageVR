@@ -1,6 +1,6 @@
 # EngageVR -- Progress Tracker
 
-## Current Milestone: 1 -- Foundation
+## Current Milestone: 2 -- Webcam Behavioural Capture
 
 **Status:** Complete
 
@@ -88,7 +88,58 @@
 
 ### Milestone 2: Webcam Behavioural Capture
 
-**Status:** Not started
+**Started:** 2026-08-01
+**Completed:** 2026-08-01
+**Status:** Milestone 2 implementation complete; physical-webcam validation pending.
+
+**Dependencies added:** numpy>=2, opencv-contrib-python>=4.9, mediapipe>=0.10.14
+
+**Deliverables:**
+- [x] `src/engagevr/capture/webcam.py` -- webcam acquisition with fake backend
+- [x] `src/engagevr/capture/frame.py` -- BGR-to-RGB/gray conversion
+- [x] `src/engagevr/capture/quality.py` -- brightness, blur, motion quality metrics
+- [x] `src/engagevr/face/landmarker.py` -- MediaPipe FaceLandmarker wrapper
+- [x] `src/engagevr/face/features.py` -- EAR, blink tracker, mouth aspect ratio
+- [x] `src/engagevr/head_pose/estimator.py` -- PnP head-pose estimation
+- [x] `src/engagevr/head_pose/features.py` -- angular velocity, motion variability
+- [x] `src/engagevr/schemas/capture.py` -- frame, landmark, behavioural, quality schemas
+- [x] Extended `configs/defaults.yaml` with face, head_pose, quality sections
+- [x] Extended `src/engagevr/config.py` with FaceConfig, HeadPoseConfig, QualityConfig
+- [x] Extended CLI with `capture` subcommand
+- [x] `scripts/download_models.py` -- FaceLandmarker model download
+- [x] 6 new test modules (66 new tests, 140 total)
+- [x] Updated README.md, pyproject.toml, docs
+
+**Model asset:**
+- Name: face_landmarker.task (float16)
+- Source: Google MediaPipe
+- License: Apache 2.0
+- Location: models/face_landmarker.task (gitignored)
+- Download: `uv run python scripts/download_models.py`
+
+**Verification:**
+- `uv lock --check` -- resolved
+- `uv sync --locked` -- clean
+- `uv run ruff format --check .` -- 50 files formatted
+- `uv run ruff check .` -- all passed
+- `uv run mypy src` -- no issues in 26 source files
+- `uv run pytest` -- 140 passed in 1.60s
+- `uv run pre-commit run --all-files` -- all passed
+- `make check` -- all passed
+
+**Decisions recorded:** DEC-014, DEC-015, DEC-016, DEC-017 (see `docs/DECISIONS.md`)
+
+**Hardware check:** No physical V4L2 webcam detected. All tests use
+`FakeCaptureBackend`. Hardware smoke test skipped (marker: `@pytest.mark.hardware`).
+
+**Milestone 2 validation pass (2026-08-01):**
+- [x] Resolved OpenCV package conflict: removed `opencv-python-headless`,
+      using `opencv-contrib-python` as single OpenCV distribution
+- [x] Verified mediapipe 1.0.0 FaceLandmarker construction with downloaded model
+- [x] Corrected status to "implementation complete; physical-webcam validation pending"
+- [x] Repaired DEC-016, recorded DEC-017
+- [x] Added opt-in hardware smoke test (`tests/hardware/test_webcam_smoke.py`)
+- [x] Fixed model download command to `uv run python scripts/download_models.py`
 
 ### Milestone 3: rPPG Pipeline
 

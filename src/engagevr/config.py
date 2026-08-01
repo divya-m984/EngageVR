@@ -24,8 +24,32 @@ class ProjectConfig(BaseModel):
 
 
 class CaptureConfig(BaseModel):
+    camera_index: int = 0
+    width: int = 640
+    height: int = 480
     webcam_fps_target: int = 30
     store_raw_video: bool = False
+    preview: bool = False
+
+
+class FaceConfig(BaseModel):
+    model_path: str = "models/face_landmarker.task"
+    min_detection_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    min_presence_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    min_tracking_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    blink_ear_threshold: float = Field(default=0.21, gt=0.0)
+    eye_closure_min_frames: int = Field(default=3, ge=1)
+
+
+class HeadPoseConfig(BaseModel):
+    velocity_window_seconds: float = Field(default=1.0, gt=0.0)
+
+
+class QualityConfig(BaseModel):
+    brightness_low: float = Field(default=40.0, ge=0.0)
+    brightness_high: float = Field(default=220.0, le=255.0)
+    blur_threshold: float = Field(default=100.0, gt=0.0)
+    motion_threshold: float = Field(default=30.0, gt=0.0)
 
 
 class WindowingConfig(BaseModel):
@@ -73,6 +97,9 @@ class EngageVRConfig(BaseModel):
 
     project: ProjectConfig = Field(default_factory=ProjectConfig)
     capture: CaptureConfig = Field(default_factory=CaptureConfig)
+    face: FaceConfig = Field(default_factory=FaceConfig)
+    head_pose: HeadPoseConfig = Field(default_factory=HeadPoseConfig)
+    quality: QualityConfig = Field(default_factory=QualityConfig)
     windowing: WindowingConfig = Field(default_factory=WindowingConfig)
     signal_quality: SignalQualityConfig = Field(default_factory=SignalQualityConfig)
     model: ModelConfig = Field(default_factory=ModelConfig)
