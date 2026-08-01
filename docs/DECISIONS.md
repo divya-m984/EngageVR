@@ -214,3 +214,85 @@ is added.
 **Consequence:** The CLI uses only the standard library. The `demo` subcommand
 generates SYNTHETIC data and prints a summary. Adding future subcommands
 requires extending the argparse parser.
+
+---
+
+### DEC-014: MediaPipe Tasks Vision API for Face Landmarks
+
+**Date:** 2026-08-01
+**Status:** Accepted
+
+**Context:** Face landmark extraction requires a maintained, Python 3.12-
+compatible library. MediaPipe provides a Tasks Vision API with a
+FaceLandmarker model that runs in VIDEO mode.
+
+**Decision:** Use `mediapipe>=0.10.14` with the `FaceLandmarker` Tasks API
+in VIDEO mode. The legacy `mediapipe.solutions.face_mesh` API is not used.
+The model asset (`face_landmarker.task`) is downloaded separately and stored
+under `models/` (gitignored).
+
+**Consequence:** The FaceLandmarker model must be downloaded before capture.
+Tests use synthetic landmarks and do not require the model or internet.
+MediaPipe-specific objects do not cross module boundaries.
+
+---
+
+### DEC-015: External Model Asset Not Committed to Git
+
+**Date:** 2026-08-01
+**Status:** Accepted
+
+**Context:** The FaceLandmarker model file is ~4 MB and is a binary asset
+from Google. Committing it to Git would bloat the repository.
+
+**Decision:** Store the model under `models/` which is listed in `.gitignore`.
+A reproducible download script (`scripts/download_models.py`) fetches it from
+the official Google Cloud Storage endpoint. The script records source, license
+(Apache 2.0), and SHA-256 checksum.
+
+**Consequence:** Users must run the download script before using the `capture`
+command. The CLI exits non-zero with a clear instruction when the model is
+missing.
+
+---
+
+### DEC-016: Behavioural Outputs Are Proxies Only
+
+**Date:** 2026-08-01
+**Status:** Accepted
+
+**Context:** Eye Aspect Ratio, blink detection, mouth movement, and head
+pose are geometric measurements derived from facial landmarks. They are
+associated with observable behaviours but do not directly measure
+engagement, cognitive load, or emotional state.
+
+**Decision:** All behavioural feature schemas and CLI outputs include
+explicit disclaimers that these are proxies. The system does not label
+facial expressions as emotions, does not infer engagement in this
+milestone, and does not identify people. When landmarks are missing or
+unreliable, feature values are set to `None` (unavailable) rather than
+silently replaced with zero or a misleading default.
+
+**Consequence:** Downstream consumers must treat these as input features,
+not as conclusions. Unavailable values propagate as `None` through the
+pipeline. The adaptation layer (future) must apply confidence and
+signal-quality thresholds before acting on any derived estimates.
+
+---
+
+### DEC-017: Single OpenCV Distribution (opencv-contrib-python)
+
+**Date:** 2026-08-01
+**Status:** Accepted
+
+**Context:** MediaPipe depends on `opencv-contrib-python`. Installing
+`opencv-python-headless` alongside it creates a conflict because both
+provide the `cv2` namespace. The capture CLI also supports an optional
+preview window, which requires a desktop-capable OpenCV build.
+
+**Decision:** Use `opencv-contrib-python` as the single OpenCV
+distribution. Remove `opencv-python-headless` from `pyproject.toml`.
+
+**Consequence:** One `cv2` package is installed. The preview window works
+when a display server is available. On headless CI, `cv2.imshow` is never
+called (preview is off by default), so no display server is required.

@@ -92,6 +92,27 @@ The system explicitly distinguishes between:
 **A poor-quality signal must never automatically be interpreted as low
 engagement or high cognitive load.**
 
+## Behavioural Proxy Limitations
+
+1. **Eye Aspect Ratio is a geometric proxy.** EAR measures eye openness from
+   landmark geometry (Soukupova & Cech, 2016). It does not measure fatigue,
+   attention, or drowsiness directly.
+
+2. **Blink detection has configurable thresholds.** Detection accuracy depends
+   on threshold tuning, lighting, glasses, and individual anatomy. False
+   positives and negatives are expected.
+
+3. **Head-pose estimation uses a generic 3D model.** The PnP solver uses a
+   canonical face geometry, not a personalized model. Accuracy varies with
+   face shape, distance, and camera parameters.
+
+4. **Mouth Aspect Ratio is not speech detection.** MAR measures vertical lip
+   separation. It does not detect speech, yawning, or specific expressions.
+
+5. **Capture quality is not engagement.** Brightness, blur, and motion scores
+   describe frame quality, not user state. Poor quality must never produce a
+   low-engagement label.
+
 ## Data Handling Limitations
 
 1. **No personally identifiable information.** Participants are identified by

@@ -6,8 +6,29 @@ project:
   version: "0.1.0"
 
 capture:
+  camera_index: 0
+  width: 640
+  height: 480
   webcam_fps_target: 30
   store_raw_video: false   # privacy: disabled by default
+  preview: false
+
+face:
+  model_path: "models/face_landmarker.task"
+  min_detection_confidence: 0.5
+  min_presence_confidence: 0.5
+  min_tracking_confidence: 0.5
+  blink_ear_threshold: 0.21
+  eye_closure_min_frames: 3
+
+head_pose:
+  velocity_window_seconds: 1.0
+
+quality:
+  brightness_low: 40.0
+  brightness_high: 220.0
+  blur_threshold: 100.0
+  motion_threshold: 30.0
 
 windowing:
   facial_aggregate_seconds: 5.0
