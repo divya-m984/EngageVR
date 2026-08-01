@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Environment and secrets
+.env
+.env.*
+secrets/
+
+# Data (large files, raw data, model artifacts)
+data/raw/*
+data/interim/*
+data/processed/*
+data/synthetic/*
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!data/synthetic/.gitkeep
+models/
+artifacts/
+
+# MLflow / DVC
+mlruns/
+.dvc/cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/settings.local.json
+CLAUDE.local.md

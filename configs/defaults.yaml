@@ -1,0 +1,41 @@
+# EngageVR default configuration
+# All values are overridable per-session or per-experiment.
+
+project:
+  name: "EngageVR"
+  version: "0.1.0"
+
+capture:
+  webcam_fps_target: 30
+  store_raw_video: false   # privacy: disabled by default
+
+windowing:
+  facial_aggregate_seconds: 5.0
+  rppg_window_seconds: 30.0
+  model_inference_seconds: 5.0
+  baseline_calibration_seconds: 120.0
+
+signal_quality:
+  min_face_detection_confidence: 0.5
+  min_rppg_quality: 0.3
+  min_hrv_window_seconds: 60.0   # do not compute HRV below this
+
+model:
+  confidence_threshold: 0.5
+  abstain_below_confidence: 0.3
+
+adaptation:
+  enabled: true
+  cooldown_seconds: 30.0
+  max_difficulty_change: 1
+  require_min_signal_quality: 0.4
+  require_min_confidence: 0.4
+
+logging:
+  level: "INFO"
+  format: "json"
+  file: null   # null = stderr only
+
+session:
+  data_dir: "data"
+  synthetic_dir: "data/synthetic"

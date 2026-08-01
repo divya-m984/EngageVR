@@ -1,0 +1,68 @@
+[project]
+name = "engagevr"
+version = "0.1.0"
+description = "An uncertainty-aware multimodal research prototype for engagement estimation, cognitive-load estimation, and adaptive virtual environments."
+readme = "README.md"
+authors = [
+    { name = "divya-m984", email = "182434568+divya-m984@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.11,<3",
+    "pyyaml>=6.0,<7",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.32,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.12,<1",
+    "mypy>=1.16,<2",
+    "pytest>=8,<9",
+    "pytest-cov>=6,<7",
+    "pre-commit>=4,<5",
+    "types-PyYAML>=6,<7",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "RUF",  # ruff-specific
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["engagevr"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short --strict-markers"
+markers = [
+    "slow: marks tests as slow",
+]
+
+[tool.coverage.run]
+source = ["engagevr"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80
