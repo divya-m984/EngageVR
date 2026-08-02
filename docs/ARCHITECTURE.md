@@ -54,17 +54,91 @@ Acquires raw signals from available sources.
 
 Processes raw signals into physiological estimates with quality scores.
 
-| Module | Responsibility |
-|--------|---------------|
-| `rppg/roi.py` | Skin-region-of-interest extraction |
-| `rppg/trace.py` | RGB trace extraction from ROI |
-| `rppg/methods.py` | Green-channel baseline, CHROM, POS algorithms |
-| `rppg/filtering.py` | Detrending, band-pass filtering, normalization |
-| `rppg/quality.py` | Signal-quality index (SNR, motion artifacts) |
-| `physiology/hr.py` | Heart-rate estimation from rPPG waveform |
-| `physiology/peaks.py` | Peak detection, IBI extraction |
-| `physiology/hrv.py` | HRV features (SDNN, RMSSD, pNN50) when valid |
-| `physiology/validation.py` | Minimum-duration and quality checks before HRV |
+| Module | Responsibility | Status |
+|--------|---------------|--------|
+| `rppg/roi.py` | Skin-region-of-interest extraction | Implemented (M3) |
+| `rppg/trace.py` | RGB trace extraction, timing diagnostics, synthetic traces | Implemented (M3) |
+| `rppg/preprocessing.py` | Detrending, normalization, resampling, band-pass filtering | Implemented (M3) |
+| `rppg/methods.py` | GREEN, CHROM, POS algorithms | Implemented (M3) |
+| `rppg/heart_rate.py` | Spectral heart-rate estimation (Welch) | Implemented (M3) |
+| `rppg/quality.py` | Interpretable signal-quality index | Implemented (M3) |
+| `rppg/window.py` | Per-window pipeline orchestration and quality gate | Implemented (M3) |
+| `rppg/evaluation.py` | Error metrics against real reference signals | Implemented (M3) |
+| `rppg/errors.py` | Typed unavailable-with-reason signalling | Implemented (M3) |
+| `physiology/peaks.py` | Peak detection, IBI extraction | **Deferred** (DEC-022) |
+| `physiology/hrv.py` | HRV features (SDNN, RMSSD, pNN50) | **Deferred** (DEC-022) |
+| `physiology/validation.py` | Minimum-duration and quality checks before HRV | **Deferred** (DEC-022) |
+
+Heart-rate estimation lives in `rppg/heart_rate.py` rather than a
+separate `physiology/` package: it operates directly on the rPPG
+waveform and shares the pipeline's configuration and failure model.
+A `physiology/` package will be created if and when HRV is implemented.
+
+#### rPPG processing flow
+
+```
+frame + landmarks
+      |
+      v
+  roi.py            forehead + both cheeks, inset, clipped to frame,
+      |             non-clipped pixels pooled, spatially averaged
+      v
+  trace.py          timestamped RGB sample; missing ROI -> valid=False
+      |             (never zero-filled). Windowed by time, not by count.
+      v
+preprocessing.py    validate timing -> resample -> detrend -> normalize
+      |             Rejects duplicate/reversed/jittery timestamps rather
+      |             than assuming uniform sampling.
+      v
+  methods.py        GREEN | CHROM | POS  ->  band-pass (Butterworth SOS,
+      |             zero-phase sosfiltfilt)
+      v
+heart_rate.py       Welch PSD -> peak search restricted to the pulse band
+      |             -> BPM = f * 60, with full spectral diagnostics
+      v
+  quality.py        ~13 independent components, equal-weight mean,
+      |             plus hard gates (DEC-021)
+      v
+  window.py         GATE: quality unacceptable  ->  heart rate = unavailable
+```
+
+#### ROI strategy
+
+Three regions — forehead and both cheeks — are derived from MediaPipe
+Face Mesh landmark index sets.  Each region's bounding box is trimmed
+inward by a configurable `inset_fraction`, which is what excludes the
+hairline above the forehead box, the eyebrows and eyes below it, and the
+nostrils and face outline beside the cheek boxes.  Boxes are clipped to
+frame bounds; degenerate or out-of-frame boxes are rejected.
+
+A pixel is *valid* when every channel lies strictly between the
+configured clipping bounds — crushed-black and saturated pixels carry no
+plethysmographic modulation.  Valid pixels from all available regions are
+pooled before averaging, so each region contributes in proportion to its
+valid-pixel count.
+
+`left` and `right` name the **image** frame, not the subject's anatomy.
+
+#### Failure and abstention conditions
+
+A window returns `unavailable` when any of these holds:
+
+| Condition | Reason code |
+|-----------|-------------|
+| Too few frames had a usable ROI | `too_few_valid_frames` |
+| Duplicate timestamps | `duplicate_timestamps` |
+| Reversed timestamps | `non_monotonic_timestamps` |
+| Inter-sample jitter beyond tolerance | `excessive_timestamp_jitter` |
+| Window shorter than the minimum | `window_too_short` |
+| Window shorter than the filter's padding requirement | `filter_not_viable` |
+| Constant or non-finite signal | `constant_signal` / `non_finite_values` |
+| Band edge at or above Nyquist | `invalid_frequency_band` |
+| No local maximum inside the pulse band | `no_spectral_peak` |
+| Peak prominence below threshold | `peak_below_min_prominence` |
+| Aggregate quality below threshold, or a gate failed | `insufficient_signal_quality` |
+
+None of these is ever rendered as a low engagement or high cognitive-load
+value.
 
 ### 3. Feature Layer (`src/engagevr/features/`)
 
@@ -89,6 +163,9 @@ Defines typed schemas, manages storage, and aligns timestamps.
 | `schemas/modality.py` | Timestamped modality samples |
 | `schemas/prediction.py` | Engagement/load estimate, confidence, abstention |
 | `schemas/adaptation.py` | Adaptation event with full provenance |
+| `schemas/rppg.py` | ROI, RGB trace, waveform, heart rate, rPPG quality, evaluation |
+| `datasets/base.py` | Abstract dataset adapter interface |
+| `datasets/ubfc_rppg.py` | UBFC-rPPG adapter (no download; see `docs/DATASETS.md`) |
 | `schemas/questionnaire.py` | Subjective response schema |
 | `synchronization/clock.py` | Common monotonic timestamp source |
 | `storage/parquet.py` | Parquet read/write for time-series data |
@@ -197,6 +274,20 @@ at startup. No configuration is hard-coded in source files. Sensitive values
 - No names, emails, or unnecessary identifying information are stored.
 - Webcam frames are never exposed outside the local machine.
 - Configuration controls what is stored and what is discarded.
+
+### rPPG-specific privacy behaviour
+
+- ROI pixels exist in memory for the duration of one frame and are
+  discarded immediately after spatial averaging.
+- No ROI image is written to disk, logged, or transmitted. The persisted
+  `RoiObservation` contains bounding coordinates, pixel counts, and mean
+  brightness only.
+- The `rppg-demo` artifact persists window-level summaries, quality
+  components, and the heart-rate estimate. Per-sample RGB arrays and
+  per-sample waveform values are excluded from the persisted output.
+- Nothing in the rPPG pipeline infers skin tone, ethnicity, identity,
+  emotion, engagement, or cognitive state from a ROI.
+- No dataset is downloaded; no data leaves the local machine.
 
 ## Synthetic Data Policy
 

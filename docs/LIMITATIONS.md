@@ -92,6 +92,101 @@ The system explicitly distinguishes between:
 **A poor-quality signal must never automatically be interpreted as low
 engagement or high cognitive load.**
 
+## rPPG Limitations (Milestone 3)
+
+### Validation status
+
+1. **No physical-webcam validation.** No physical V4L2 webcam is
+   available in the development environment. The rPPG pipeline has never
+   been run on live camera frames. Every automated test uses synthetic
+   RGB traces, synthetic frames, or local fixtures.
+
+2. **No public-dataset validation.** UBFC-rPPG is not present locally.
+   The adapter's discovery and parsing are tested against temporary
+   deterministic fixtures containing no real dataset content. **No MAE,
+   RMSE, bias, coverage, or accuracy figure against any public dataset
+   exists in this repository.**
+
+3. **Synthetic recovery is not validation.** The `rppg-demo` command
+   reports how closely the pipeline recovers a pulse frequency that the
+   program itself inserted. That is a software self-check. It is not
+   evidence about real physiological signals, and it is never to be
+   presented as accuracy.
+
+4. **No medical or diagnostic use.** Estimated pulse rate from a camera
+   is not a medical measurement. It has not been compared against any
+   reference device here. It must never be used for diagnosis,
+   screening, monitoring, or any clinical purpose.
+
+### Signal-condition limitations
+
+5. **Motion.** Head motion changes the ROI's pixel content and its
+   illumination geometry simultaneously. CHROM and POS suppress
+   intensity-only variation, but neither removes motion that changes
+   the *chrominance* of the sampled skin. Sustained motion degrades or
+   invalidates the estimate.
+
+6. **Illumination change.** Ambient light change, screen glow from the
+   task itself, and shadows crossing the face all inject energy that can
+   fall inside the pulse band. GREEN is essentially defenceless against
+   this by construction.
+
+7. **Camera auto-exposure and auto-white-balance.** Consumer webcams
+   continuously adjust gain and colour balance. Those adjustments are
+   *correlated with the scene*, so they are not removed by detrending
+   and can imitate or cancel a pulse. Disabling auto-exposure is
+   strongly advisable and is not currently enforced by the capture layer.
+
+8. **Video compression.** Compression discards exactly the low-amplitude
+   chrominance detail that carries the plethysmographic signal. The
+   modulation is well under 1 % of the pixel value. Any lossy-compressed
+   source may have no recoverable signal at all.
+
+9. **Low frame rate.** The band's upper edge must be strictly below
+   Nyquist. At 30 fps a 4 Hz (240 BPM) edge is fine; below roughly 10
+   fps the configuration is rejected outright rather than silently
+   aliasing.
+
+10. **Skin-region tracking errors.** ROIs are derived from landmark
+    bounding boxes with a fixed inward inset. Under head rotation,
+    occlusion (hair, glasses, hands), or landmark jitter, the box can
+    drift onto hair, background, or eyes. The valid-pixel and clipping
+    checks catch gross failures, not subtle drift.
+
+11. **Skin tone and lighting interact.** rPPG signal strength depends on
+    the light reaching and returning from the dermis, which varies with
+    skin tone and with illumination spectrum. This project performs no
+    skin-tone inference and makes **no claim** about equitable
+    performance across skin tones. UBFC-rPPG's demographic composition
+    is not documented and could not establish such a claim in any case.
+
+12. **Spectral resolution bounds precision.** BPM precision is limited by
+    the Welch bin width — at the default 8 s segment and 30 fps, 0.125 Hz
+    = 7.5 BPM. Every estimate reports its own `frequency_resolution_hz`.
+    A BPM stated more precisely than that resolution is not meaningful.
+
+13. **Spectral estimation cannot separate a harmonic from a fundamental.**
+    If the second harmonic is stronger than the fundamental within the
+    band, the peak search will select it, and the reported rate will be
+    double the true one. No harmonic disambiguation is implemented.
+
+14. **No method is superior.** GREEN, CHROM, and POS are implemented from
+    their primary references. Relative performance depends on
+    illumination, motion, camera, and subject. Nothing in this repository
+    ranks them, and agreement between two methods is weak corroboration
+    only — both read the same corrupted pixels.
+
+15. **HRV is deliberately absent.** See DEC-022. Inter-beat intervals
+    derived from an unvalidated camera waveform would look precise and
+    mean nothing.
+
+### rPPG quality is not engagement
+
+16. **A low rPPG quality score describes the camera signal, never the
+    person.** It means the measurement cannot be trusted. It does not
+    mean the person is disengaged, stressed, fatigued, or cognitively
+    loaded. A low-quality window returns `unavailable`, not a low value.
+
 ## Behavioural Proxy Limitations
 
 1. **Eye Aspect Ratio is a geometric proxy.** EAR measures eye openness from

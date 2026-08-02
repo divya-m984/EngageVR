@@ -1,8 +1,9 @@
 # EngageVR -- Progress Tracker
 
-## Current Milestone: 2 -- Webcam Behavioural Capture
+## Current Milestone: 3 -- Interpretable rPPG Signal-Processing Pipeline
 
-**Status:** Complete
+**Status:** Milestone 3 implementation complete; physical-webcam and
+public-dataset validation pending.
 
 ## Milestone History
 
@@ -141,9 +142,91 @@
 - [x] Added opt-in hardware smoke test (`tests/hardware/test_webcam_smoke.py`)
 - [x] Fixed model download command to `uv run python scripts/download_models.py`
 
-### Milestone 3: rPPG Pipeline
+---
 
-**Status:** Not started
+### Milestone 3: Interpretable rPPG Signal-Processing Pipeline
+
+**Started:** 2026-08-02
+**Completed (implementation):** 2026-08-02
+**Status:** Milestone 3 implementation complete; physical-webcam and
+public-dataset validation pending.
+
+**Dependencies added:** `scipy>=1.15,<2` (runtime, resolved to 1.18.0);
+`scipy-stubs>=1.15,<2` (dev, for strict type checking). No other
+dependency added.
+
+**Deliverables:**
+- [x] `src/engagevr/schemas/rppg.py` -- 9 typed schemas plus
+      `UnavailableReason`, `RoiRegion`, `RppgMethod`
+- [x] `src/engagevr/rppg/errors.py` -- typed unavailable-with-reason
+- [x] `src/engagevr/rppg/roi.py` -- forehead + both cheeks, inset,
+      frame-clipped, valid-pixel accounting
+- [x] `src/engagevr/rppg/trace.py` -- timestamped RGB trace, timing
+      diagnostics, deterministic SYNTHETIC generator
+- [x] `src/engagevr/rppg/preprocessing.py` -- detrend, normalize,
+      resample, Butterworth SOS band-pass via `sosfiltfilt`
+- [x] `src/engagevr/rppg/methods.py` -- GREEN, CHROM, POS
+- [x] `src/engagevr/rppg/heart_rate.py` -- Welch PSD peak estimation
+- [x] `src/engagevr/rppg/quality.py` -- ~13-component quality index
+- [x] `src/engagevr/rppg/window.py` -- orchestration and quality gate
+- [x] `src/engagevr/rppg/evaluation.py` -- reference-only error metrics
+- [x] `src/engagevr/datasets/base.py` -- abstract adapter interface
+- [x] `src/engagevr/datasets/ubfc_rppg.py` -- UBFC-rPPG adapter
+- [x] Extended `configs/defaults.yaml` and `config.py` with a validated
+      `rppg` section (7 sub-sections, cross-field validators)
+- [x] Extended CLI with `rppg-demo` and `rppg-evaluate`
+- [x] 7 new test modules (279 new tests, 420 total)
+- [x] `docs/DATASETS.md`, `docs/REFERENCES.md` created
+- [x] Updated README, ARCHITECTURE, LIMITATIONS, DECISIONS
+
+**Methods implemented (from primary references):**
+
+| Method | Reference | DOI |
+|--------|-----------|-----|
+| GREEN | Verkruysse, Svaasand & Nelson (2008) | 10.1364/OE.16.021434 |
+| CHROM | de Haan & Jeanne (2013) | 10.1109/TBME.2013.2266196 |
+| POS | Wang, den Brinker, Stuijk & de Haan (2017) | 10.1109/TBME.2016.2609282 |
+
+Equations, windowing, overlap assumptions, and every deviation from the
+published algorithms are recorded in `docs/REFERENCES.md` and in the
+function docstrings.
+
+**Verification:**
+- `uv lock --check` -- resolved
+- `uv sync --locked` -- clean (53 packages)
+- `uv tree` -- no duplicate or conflicting packages; one OpenCV wheel
+- `uv run ruff format --check .` -- 75 files formatted
+- `uv run ruff check .` -- all checks passed
+- `uv run mypy src` -- no issues in 40 source files
+- `uv run pytest` -- 419 passed, 1 skipped
+- `uv run pytest -m hardware` -- 1 skipped (no physical webcam)
+- `uv run pre-commit run --all-files` -- all passed
+- `make check` -- all passed
+
+**Acceptance criteria against `docs/PROJECT_PLAN.md`:**
+
+| Criterion | Status |
+|-----------|--------|
+| Pipeline processes a known public sample | **NOT MET -- pending.** UBFC-rPPG is not present locally and is not downloaded by this software. |
+| Signal quality is reported per window | Met. ~13 named components with raw values, documented aggregation, explicit gates. |
+| Unreliable windows return `unavailable` | Met. Asserted by tests across ROI, timing, filter, spectral, and quality-threshold failures. |
+| No fabricated accuracy claims | Met. Error metrics are computed only against genuine reference signals; synthetic recovery is labelled a self-check, not validation. |
+
+**Hardware check:** No physical V4L2 webcam detected. The rPPG pipeline
+has never been run on live camera frames.
+
+**Public-dataset check:** UBFC-rPPG not present. Adapter tested against
+temporary deterministic fixtures only. No dataset metric exists.
+
+**Decisions recorded:** DEC-018 through DEC-024 (see `docs/DECISIONS.md`)
+
+**Remaining validation for this milestone:**
+1. Run `capture` + rPPG on a physical webcam once hardware is available.
+2. Obtain UBFC-rPPG through the official channel, resolve its licensing
+   (currently unverified), confirm the reference sampling rate, then run
+   a real evaluation and record the metrics with full provenance.
+
+---
 
 ### Milestone 4: Task Environment and Simulator
 
