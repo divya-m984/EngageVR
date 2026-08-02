@@ -30,6 +30,58 @@ quality:
   blur_threshold: 100.0
   motion_threshold: 30.0
 
+# --- Remote photoplethysmography (rPPG) ---
+# Heart-rate outputs are signal-processing ESTIMATES from camera data.
+# They are not medical measurements and are not engagement or cognitive load.
+rppg:
+  method: "pos"            # green | chrom | pos
+
+  roi:
+    regions: ["forehead", "left_cheek", "right_cheek"]
+    inset_fraction: 0.15   # trim toward centre: excludes hair, brows, eyes, nostrils
+    min_valid_pixels: 200
+    min_valid_pixel_pct: 60.0
+    clipping_low: 5        # <= this is crushed black
+    clipping_high: 250     # >= this is saturated
+
+  trace:
+    expected_fps: 30.0
+    max_timestamp_jitter_s: 0.02
+    min_valid_frame_pct: 80.0
+
+  window:
+    duration_seconds: 30.0    # specification recommends 20-30 s
+    step_seconds: 1.0
+    min_duration_seconds: 8.0
+
+  preprocessing:
+    detrend: true
+    normalize: true
+    resample_uniform: true
+    filter_order: 4
+    # 0.7-4.0 Hz = 42-240 BPM, following the 40-240 BPM pulse range used by
+    # de Haan & Jeanne (2013), DOI 10.1109/TBME.2013.2266196.
+    pulse_band_low_hz: 0.7
+    pulse_band_high_hz: 4.0
+
+  spectral:
+    welch_segment_seconds: 8.0
+    welch_overlap: 0.5
+    peak_bandwidth_hz: 0.1
+    min_relative_peak_prominence: 0.3
+    min_spectral_peak_ratio: 0.15
+
+  quality:
+    threshold: 0.5           # below this, heart rate is reported unavailable
+    max_illumination_cv: 0.05
+    max_clipped_pixel_pct: 5.0
+    max_motion_score: 30.0
+    method_agreement_tolerance_bpm: 10.0
+
+  datasets:
+    # Nothing is downloaded automatically. See docs/DATASETS.md.
+    ubfc_rppg_root: null
+
 windowing:
   facial_aggregate_seconds: 5.0
   rppg_window_seconds: 30.0

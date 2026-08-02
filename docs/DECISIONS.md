@@ -296,3 +296,178 @@ distribution. Remove `opencv-python-headless` from `pyproject.toml`.
 **Consequence:** One `cv2` package is installed. The preview window works
 when a display server is available. On headless CI, `cv2.imshow` is never
 called (preview is off by default), so no display server is required.
+
+---
+
+### DEC-018: SciPy for Classical Signal Processing
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** Milestone 3 requires Butterworth filter design, zero-phase
+filtering, linear detrending, Welch power spectral density estimation,
+and peak prominence. NumPy alone provides none of these.
+
+**Decision:** Add `scipy>=1.15,<2` as a direct runtime dependency, and
+`scipy-stubs` as a dev dependency so `mypy --strict` type-checks SciPy
+calls rather than treating them as `Any`. SciPy 1.18.0 resolves for
+Python 3.12; the lower bound 1.15 is the oldest release in the range
+that ships cp312 wheels for the current dependency set.
+
+No other dependency is added. PyTorch, TensorFlow, XGBoost,
+scikit-learn, FastAPI, Streamlit, MLflow, and DVC remain out of scope.
+
+**Consequence:** The dependency tree gains SciPy and its single
+transitive requirement (NumPy, already present at the same version). No
+duplicate or conflicting package results.
+
+---
+
+### DEC-019: Three Classical rPPG Methods, No Learned Method
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** The specification lists green-channel, CHROM, and POS as
+candidate methods and requires interpretable signal processing before
+deep learning.
+
+**Decision:** Implement GREEN (Verkruysse et al., 2008), CHROM (de Haan
+& Jeanne, 2013), and POS (Wang et al., 2017) from their primary
+references, behind one shared typed interface. Every deviation from a
+published algorithm is recorded in the function docstring and in
+`docs/REFERENCES.md`. No learned method is implemented.
+
+**Consequence:** All three methods can be run over the same window and
+compared. The project makes **no claim** that any one of them is
+superior; relative performance depends on illumination, motion, camera,
+and subject, and nothing in this repository establishes a ranking.
+
+---
+
+### DEC-020: Unavailable Is a Value, Never NaN or a Clamp
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** A heart-rate estimate that cannot be justified must be
+distinguishable from one that can. Filling with NaN, zero, the previous
+value, or a clamped in-range number destroys that distinction.
+
+**Decision:** Numeric helpers raise `RppgUnavailable` carrying a
+machine-readable `UnavailableReason`; the orchestration layer converts
+it into an `available=False` schema field with that reason attached.
+Missing frames are recorded as invalid samples with no channel values,
+never imputed. A BPM outside the configured band is never clamped into
+it — the search is restricted to the band, and if no acceptable in-band
+peak exists the estimate is withheld.
+
+**Consequence:** `RppgUnavailable` lives in `src/engagevr/rppg/errors.py`,
+one module beyond the filenames listed in the milestone brief. This
+keeps the numeric helpers total and independently testable while
+guaranteeing no NaN-filled value reaches a schema.
+
+---
+
+### DEC-021: rPPG Quality Uses Equal Weights Plus Hard Gates
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** An aggregate quality score needs a defensible combination
+rule. Hand-picked weights across a dozen components would be an
+arbitrary unexplained constant, which the project rules forbid.
+
+**Decision:** `overall_quality` is the **unweighted arithmetic mean of
+the components that could actually be computed** for that window.
+Components that could not be computed are omitted, not imputed.
+Separately, four components are **gates** — ROI availability, timestamp
+monotonicity, filter viability, and window duration. A failed gate
+forces `acceptable=False` regardless of the mean, because these
+conditions make the estimate invalid rather than merely noisy.
+
+Equal weighting is chosen because this repository has no validated
+empirical basis for ranking the components against one another. If such
+a basis is established later, the weights must be derived from it and
+recorded here.
+
+**Consequence:** The aggregation rule is stated in the schema docstring
+and asserted by a test. A window with unacceptable quality returns
+`unavailable` for heart rate. Poor quality is reported as poor quality,
+never as low engagement.
+
+---
+
+### DEC-022: HRV and Inter-Beat Intervals Deferred
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** The specification lists HRV features (SDNN, RMSSD, pNN50)
+under the physiological feature category, and the milestone brief
+explicitly permits deferring them.
+
+**Decision:** No HRV, IBI, SDNN, RMSSD, or pNN50 value is computed in
+Milestone 3. Time-domain HRV requires beat-to-beat interval accuracy on
+the order of milliseconds, which requires validated individual peak
+detection on a waveform whose morphology is trustworthy. A spectral
+pulse-rate estimate provides no per-beat timing whatsoever.
+
+The prerequisites that must be established from primary literature
+before HRV is implemented are listed in `docs/REFERENCES.md`.
+
+**Consequence:** A test asserts that no HRV-shaped field exists on the
+heart-rate schema, so the deferral cannot be silently undone.
+
+---
+
+### DEC-023: Datasets Are Never Downloaded Automatically
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** UBFC-rPPG is distributed from a university page whose terms
+of use are not stated explicitly. Automatically fetching data whose
+licence is unknown would commit the user to terms neither they nor this
+project have read.
+
+**Decision:** Dataset adapters contain no network code. Roots are
+supplied through configuration or `--root`. `docs/DATASETS.md` records
+the official source, citation, access procedure, and — for UBFC-rPPG —
+that the licence **requires manual verification**, because no explicit
+permitted-use statement was found on the official page. Absence of a
+stated licence is recorded as absence, never as permission.
+
+Facts that the official source does not state, such as the reference
+oximeter's sampling rate, are left as `None` rather than guessed.
+
+**Consequence:** A test asserts the adapter module contains no
+networking imports. Public-dataset evaluation remains **pending** until
+the data is obtained through the official channel and the pipeline is
+actually run against it.
+
+---
+
+### DEC-024: Two Additional rPPG Modules Beyond the Listed Filenames
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** The Milestone 3 brief lists a specific set of module
+filenames and permits adjustment for a documented architectural reason.
+
+**Decision:** Two modules are added beyond that list:
+
+- `src/engagevr/rppg/errors.py` — the typed failure signal described in
+  DEC-020. Placing `RppgUnavailable` in any of the listed modules would
+  force a circular import, since every one of them needs to raise it.
+- `src/engagevr/rppg/evaluation.py` — dataset error metrics. These
+  belong with the rPPG pipeline rather than in `datasets/`, which is
+  responsible for reading data, not for judging estimator accuracy.
+
+`ARCHITECTURE.md` previously listed `rppg/filtering.py`; the actual
+module is `rppg/preprocessing.py`, because it covers detrending,
+normalization, and resampling in addition to filtering.
+
+**Consequence:** `docs/ARCHITECTURE.md` is updated to match the
+implemented module layout.
