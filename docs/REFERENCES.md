@@ -227,3 +227,71 @@ numbers that look precise and mean nothing.
 deep learning.  Classical methods must be evaluated on a real public
 dataset first.
 </content>
+
+## Milestone 4 — Protocol, Timing, and Task
+
+### Clock-offset estimation from round trips
+
+The heartbeat diagnostic uses the standard four-timestamp formulation. For a
+request sent at client time `t0`, received by the server at `t1`, answered at
+`t2`, and received back by the client at `t3`:
+
+```
+rtt    = (t3 - t0) - (t2 - t1)
+offset = ((t1 - t0) + (t2 - t3)) / 2
+```
+
+with `|true offset − offset| ≤ rtt / 2` **under an assumption of symmetric
+path delay**.
+
+Reference: D. Mills, J. Martin (ed.), J. Burbank, W. Kasch, *Network Time
+Protocol Version 4: Protocol and Algorithms Specification*, RFC 5905, IETF,
+June 2010, §8 ("On-Wire Protocol").
+DOI: [10.17487/RFC5905](https://doi.org/10.17487/RFC5905)
+
+**Deviations and scope in this repository:**
+
+- No clock is ever adjusted or corrected. The formula is used for
+  *diagnostics only*.
+- The symmetric-delay assumption is **not verifiable** here, so `rtt / 2` is
+  recorded as a bound *under an unverified assumption* rather than as an
+  error bar, and `symmetric_delay_assumed = True` travels with every
+  estimate.
+- No filtering, clock discipline, or stratum logic from RFC 5905 is
+  implemented. A single round trip yields a single estimate.
+- Monotonic clocks from different processes are never compared: their
+  origins are unrelated.
+
+### JSON Lines
+
+The event stream uses the JSON Lines convention — one complete JSON value per
+line, UTF-8, newline-delimited. See <https://jsonlines.org/>. The property
+this project relies on is that records are independent, so a torn final line
+from an interrupted write affects only itself and every previously flushed
+line remains readable.
+
+### Reaction-time distribution used by the simulator
+
+The simulator draws fabricated reaction times from a lognormal shape.
+
+**This is not a model of human reaction times.** No parameter was fitted to
+any dataset, no distributional claim is made, and the values are not
+comparable to any published reaction-time norm. The shape was chosen only
+because it is strictly positive and right-skewed, so that fabricated values
+do not look like a symmetric artefact. A literature-grounded response model
+would require an experimental design, a pilot, and approval, none of which
+exist — see `docs/LIMITATIONS.md`.
+
+### Task paradigm
+
+The desktop task is a **neutral stimulus–response task**: three abstract
+shapes, one response key each, a configurable response deadline. The
+specification lists sequence-classification, working-memory, visual-search,
+and response-inhibition paradigms as candidates for a future, properly
+designed task.
+
+No published paradigm is claimed to be implemented here. The current task is
+a **software telemetry source** used to exercise the protocol, the backend,
+the storage layer, and the replay path. Selecting and justifying an actual
+cognitive paradigm from primary literature is future work that must precede
+any psychological interpretation of its output.

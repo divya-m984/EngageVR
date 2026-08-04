@@ -6,11 +6,17 @@ Usage::
     uv run python -m engagevr capture --camera 0 --duration 30
     uv run python -m engagevr rppg-demo --bpm 72 --duration 30 --method pos
     uv run python -m engagevr rppg-evaluate --dataset ubfc-rppg --root /path/to/data
+    uv run python -m engagevr serve --host 127.0.0.1 --port 8000
+    uv run python -m engagevr task-sim --seed 42 --blocks 2 --trials-per-block 10
+    uv run python -m engagevr session-inspect artifacts/sessions/SESSION_ID
+    uv run python -m engagevr session-replay artifacts/sessions/SESSION_ID --speed 0
 
-All outputs from the ``demo`` and ``rppg-demo`` commands are deterministic
-SYNTHETIC data.  Capture outputs are behavioural proxies, NOT engagement,
-psychological, clinical, or diagnostic conclusions.  rPPG heart rates are
-signal-processing estimates, NOT medical measurements.
+All outputs from the ``demo``, ``rppg-demo``, and ``task-sim`` commands are
+deterministic SYNTHETIC data.  Capture outputs are behavioural proxies, NOT
+engagement, psychological, clinical, or diagnostic conclusions.  rPPG heart
+rates are signal-processing estimates, NOT medical measurements.  Task
+telemetry is a software measurement, NOT an engagement, attention,
+cognitive-load, or fatigue measurement.
 """
 
 from __future__ import annotations
@@ -127,6 +133,10 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default="artifacts/dataset-evaluation.json",
     )
+
+    from engagevr.cli_milestone4 import add_parsers
+
+    add_parsers(sub)
     return parser
 
 
@@ -658,6 +668,17 @@ def main(argv: list[str] | None = None) -> int:
         return _run_rppg_demo(args)
     if args.command == "rppg-evaluate":
         return _run_rppg_evaluate(args)
+
+    if args.command in ("serve", "task-sim", "session-inspect", "session-replay"):
+        from engagevr import cli_milestone4
+
+        dispatch = {
+            "serve": cli_milestone4.run_serve,
+            "task-sim": cli_milestone4.run_task_sim,
+            "session-inspect": cli_milestone4.run_session_inspect,
+            "session-replay": cli_milestone4.run_session_replay,
+        }
+        return dispatch[args.command](args)
 
     parser.print_help()
     return 1

@@ -1,4 +1,4 @@
-.PHONY: install format lint typecheck test test-cov check clean
+.PHONY: install format lint typecheck test test-cov check clean protocol
 
 install:
 	uv sync
@@ -17,6 +17,9 @@ test:
 
 test-cov:
 	uv run pytest --cov --cov-report=term-missing
+
+protocol:
+	uv run python scripts/generate_protocol_artifacts.py
 
 check: format lint typecheck test
 	@echo "All checks passed."

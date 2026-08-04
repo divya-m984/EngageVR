@@ -1,0 +1,23 @@
+{
+  "correlation_id": "fixture-heartbeat",
+  "message_id": "fixture-heartbeat-acknowledgement",
+  "message_type": "heartbeat_acknowledgement",
+  "payload": {
+    "client_monotonic_seconds": 1234.5,
+    "heartbeat_id": "hb-0001",
+    "server_received_at_utc": "2026-01-01T12:00:00Z",
+    "server_sent_at_utc": "2026-01-01T12:00:00Z"
+  },
+  "protocol_version": "1.0",
+  "provenance": {
+    "data_source": "live",
+    "producer": "engagevr.protocol.fixtures",
+    "synthetic_label": null
+  },
+  "replay": null,
+  "sent_at_monotonic_seconds": 1003.0,
+  "sent_at_utc": "2026-01-01T12:00:00Z",
+  "sequence_number": 3,
+  "session_id": "fixture-session",
+  "source": "backend"
+}

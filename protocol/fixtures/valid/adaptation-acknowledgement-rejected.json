@@ -1,0 +1,24 @@
+{
+  "correlation_id": "fixture-adaptation-command-pause",
+  "message_id": "fixture-adaptation-acknowledgement-rejected",
+  "message_type": "adaptation_acknowledgement",
+  "payload": {
+    "accepted": false,
+    "applied_at_utc": null,
+    "command_id": "cmd-0002",
+    "duplicate": false,
+    "rejection_reason": "pause_task requires state 'running'; the task is 'idle'"
+  },
+  "protocol_version": "1.0",
+  "provenance": {
+    "data_source": "synthetic",
+    "producer": "engagevr.protocol.fixtures",
+    "synthetic_label": "SYNTHETIC"
+  },
+  "replay": null,
+  "sent_at_monotonic_seconds": 1008.0,
+  "sent_at_utc": "2026-01-01T12:00:00Z",
+  "sequence_number": 8,
+  "session_id": "fixture-session",
+  "source": "unity_client"
+}

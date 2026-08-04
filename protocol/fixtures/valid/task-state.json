@@ -1,0 +1,25 @@
+{
+  "correlation_id": null,
+  "message_id": "fixture-task-state",
+  "message_type": "task_state",
+  "payload": {
+    "block_id": 0,
+    "difficulty_level": 1,
+    "state": "running",
+    "stimulus_interval_ms": 500.0,
+    "task_id": "reaction_task_v1",
+    "trial_id": 4
+  },
+  "protocol_version": "1.0",
+  "provenance": {
+    "data_source": "synthetic",
+    "producer": "engagevr.protocol.fixtures",
+    "synthetic_label": "SYNTHETIC"
+  },
+  "replay": null,
+  "sent_at_monotonic_seconds": 1005.0,
+  "sent_at_utc": "2026-01-01T12:00:00Z",
+  "sequence_number": 5,
+  "session_id": "fixture-session",
+  "source": "unity_client"
+}

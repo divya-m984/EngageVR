@@ -1,0 +1,25 @@
+{
+  "correlation_id": null,
+  "message_id": "fixture-protocol-error",
+  "message_type": "protocol_error",
+  "payload": {
+    "detail": "unknown message_type 'not_a_real_type'",
+    "error_code": "unknown_message_type",
+    "fatal": false,
+    "offending_message_id": "fixture-bad",
+    "offending_message_type": "not_a_real_type",
+    "offending_sequence_number": 99
+  },
+  "protocol_version": "1.0",
+  "provenance": {
+    "data_source": "live",
+    "producer": "engagevr.protocol.fixtures",
+    "synthetic_label": null
+  },
+  "replay": null,
+  "sent_at_monotonic_seconds": 1005.0,
+  "sent_at_utc": "2026-01-01T12:00:00Z",
+  "sequence_number": 5,
+  "session_id": "fixture-session",
+  "source": "backend"
+}

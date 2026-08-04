@@ -1,0 +1,21 @@
+{
+  "correlation_id": null,
+  "message_id": "fixture-heartbeat",
+  "message_type": "heartbeat",
+  "payload": {
+    "client_monotonic_seconds": 1234.5,
+    "heartbeat_id": "hb-0001"
+  },
+  "protocol_version": "1.0",
+  "provenance": {
+    "data_source": "synthetic",
+    "producer": "engagevr.protocol.fixtures",
+    "synthetic_label": "SYNTHETIC"
+  },
+  "replay": null,
+  "sent_at_monotonic_seconds": 1009.0,
+  "sent_at_utc": "2026-01-01T12:00:00Z",
+  "sequence_number": 9,
+  "session_id": "fixture-session",
+  "source": "unity_client"
+}

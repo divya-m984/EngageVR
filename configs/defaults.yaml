@@ -112,3 +112,59 @@ logging:
 session:
   data_dir: "data"
   synthetic_dir: "data/synthetic"
+
+# --- Milestone 4: local real-time bridge, task simulator, storage, replay ---
+# This prototype has NO authentication, authorization, or transport
+# encryption. It is a localhost development server and must not be exposed.
+
+server:
+  host: "127.0.0.1"          # loopback only
+  port: 8000
+  allow_public_bind: false   # required before binding a non-loopback address
+  maximum_message_bytes: 262144
+  heartbeat_interval_seconds: 10.0
+  connection_timeout_seconds: 30.0   # must exceed the heartbeat interval
+  acknowledgement_timeout_seconds: 5.0
+
+protocol:
+  version: "1.0"
+  accepted_major_versions: [1]
+  maximum_clock_skew_seconds: 5.0
+  maximum_sequence_gap: 1000
+  maximum_transport_delay_seconds: 2.0
+
+queues:
+  # Every queue is bounded. A full queue drops non-critical telemetry and
+  # counts the drop; it never blocks the process indefinitely and never
+  # drops session_start, session_end, adaptation_command,
+  # adaptation_acknowledgement, protocol_error, or task_completed.
+  ingestion_capacity: 1024
+  storage_capacity: 1024
+  broadcast_capacity: 256
+  operation_timeout_seconds: 2.0
+
+sessions:
+  root_directory: "artifacts/sessions"   # gitignored
+  flush_every_events: 1
+  atomic_summary: true
+  recover_incomplete_sessions: true
+
+task:
+  # Reaction-task geometry. Task telemetry is a SOFTWARE measurement.
+  # It is not an engagement, attention, cognitive-load, or fatigue measure.
+  blocks: 2
+  trials_per_block: 10
+  stimulus_duration_ms: 800.0
+  response_timeout_ms: 1500.0
+  inter_trial_interval_ms: 500.0
+  default_difficulty: 1
+  # The three values below control how the simulator FABRICATES responses.
+  # They are SYNTHETIC test parameters, not a model of human performance.
+  synthetic_response_latency_ms: 450.0
+  synthetic_error_rate: 0.2
+  synthetic_timeout_rate: 0.1
+
+replay:
+  default_speed: 1.0        # 1.0 = original timing; 0 = immediate, no sleeping
+  maximum_speed: 1000.0
+  preserve_original_timing: true

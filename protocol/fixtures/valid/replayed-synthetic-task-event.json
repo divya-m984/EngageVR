@@ -1,0 +1,43 @@
+{
+  "correlation_id": null,
+  "message_id": "fixture-replayed-synthetic-task-event",
+  "message_type": "task_event",
+  "payload": {
+    "event": {
+      "block_id": 0,
+      "difficulty_level": 1,
+      "event_type": "trial_completed",
+      "expected_response": null,
+      "observed_response": null,
+      "reaction_time_ms": null,
+      "response_correct": null,
+      "response_outcome": null,
+      "stimulus_category": null,
+      "stimulus_id": null,
+      "task_elapsed_ms": null,
+      "task_id": "reaction_task_v1",
+      "trial_elapsed_ms": null,
+      "trial_id": 3
+    }
+  },
+  "protocol_version": "1.0",
+  "provenance": {
+    "data_source": "synthetic",
+    "producer": "engagevr.protocol.fixtures",
+    "synthetic_label": "SYNTHETIC"
+  },
+  "replay": {
+    "original_arrival_index": 42,
+    "replay_index": 42,
+    "replay_label": "REPLAY",
+    "replay_session_id": "replay-of-recorded-session",
+    "replay_speed": 5.0,
+    "replayed_at_utc": "2026-01-01T12:00:00Z",
+    "source_session_id": "recorded-session"
+  },
+  "sent_at_monotonic_seconds": 1011.0,
+  "sent_at_utc": "2026-01-01T12:00:00Z",
+  "sequence_number": 11,
+  "session_id": "fixture-session",
+  "source": "python_simulator"
+}

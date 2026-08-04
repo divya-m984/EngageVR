@@ -6,12 +6,18 @@ supplied path) and validates it against typed Pydantic models.
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Self
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
+from engagevr.protocol.version import (
+    ACCEPTED_MAJOR_VERSIONS,
+    PROTOCOL_VERSION,
+    ProtocolVersionError,
+    parse_protocol_version,
+)
 from engagevr.schemas.rppg import RoiRegion, RppgMethod
 
 _DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "defaults.yaml"
@@ -361,6 +367,254 @@ class SessionConfig(BaseModel):
     synthetic_dir: str = "data/synthetic"
 
 
+# --- Milestone 4: real-time bridge, task simulator, storage, replay ---
+
+
+class ServerConfig(BaseModel):
+    """Local development server binding and connection limits.
+
+    The server binds to loopback by default.  Binding to a
+    non-loopback address requires ``allow_public_bind`` to be set
+    explicitly, because this prototype has **no authentication,
+    authorization, or transport encryption** and must not be reachable
+    from a network.
+    """
+
+    host: str = Field(default="127.0.0.1", min_length=1)
+    port: int = Field(default=8000, ge=1, le=65535)
+    allow_public_bind: bool = Field(
+        default=False,
+        description="Required before binding anywhere other than loopback.",
+    )
+    maximum_message_bytes: int = Field(
+        default=262_144,
+        ge=1024,
+        le=16_777_216,
+        description="Largest accepted single WebSocket frame.",
+    )
+    heartbeat_interval_seconds: float = Field(
+        default=10.0, gt=0.0, description="How often the server expects liveness."
+    )
+    connection_timeout_seconds: float = Field(
+        default=30.0,
+        gt=0.0,
+        description="Silence after which a connection is closed as timed out.",
+    )
+    acknowledgement_timeout_seconds: float = Field(
+        default=5.0,
+        gt=0.0,
+        description="How long a sender waits for an acknowledgement.",
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.connection_timeout_seconds <= self.heartbeat_interval_seconds:
+            raise ValueError(
+                "server.connection_timeout_seconds must exceed "
+                "server.heartbeat_interval_seconds, otherwise a healthy "
+                "client is timed out between heartbeats"
+            )
+        if not self.allow_public_bind and not _is_loopback_host(self.host):
+            raise ValueError(
+                f"server.host {self.host!r} is not a loopback address. This "
+                "prototype has no authentication and must not be exposed. "
+                "Set server.allow_public_bind: true to override deliberately."
+            )
+        return self
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Whether ``host`` refers only to the local machine."""
+    normalized = host.strip().strip("[]").lower()
+    if normalized in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    return normalized.startswith("127.")
+
+
+class ProtocolSettings(BaseModel):
+    """Protocol version acceptance and message-integrity tolerances."""
+
+    version: str = Field(default=PROTOCOL_VERSION)
+    accepted_major_versions: list[int] = Field(
+        default_factory=lambda: list(ACCEPTED_MAJOR_VERSIONS), min_length=1
+    )
+    maximum_clock_skew_seconds: float = Field(
+        default=5.0,
+        gt=0.0,
+        description=(
+            "A sender timestamp further in the future than this is flagged "
+            "as a clock observation. It never causes a rejection."
+        ),
+    )
+    maximum_sequence_gap: int = Field(
+        default=1000,
+        ge=0,
+        description="Largest missing sequence range that is enumerated in full.",
+    )
+    maximum_transport_delay_seconds: float = Field(
+        default=2.0,
+        gt=0.0,
+        description=(
+            "Delay beyond which an in-process message is flagged as slow. "
+            "Not applied across processes, where the subtraction would "
+            "measure clock offset rather than delay."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        try:
+            major, _minor = parse_protocol_version(self.version)
+        except ProtocolVersionError as exc:
+            raise ValueError(f"protocol.version is invalid: {exc}") from exc
+        if major not in self.accepted_major_versions:
+            raise ValueError(
+                f"protocol.version {self.version!r} has major version {major}, "
+                "which is not in protocol.accepted_major_versions "
+                f"{self.accepted_major_versions}"
+            )
+        unsupported = [
+            v for v in self.accepted_major_versions if v not in ACCEPTED_MAJOR_VERSIONS
+        ]
+        if unsupported:
+            raise ValueError(
+                f"protocol.accepted_major_versions lists {unsupported}, which "
+                "this build cannot parse; it implements "
+                f"{list(ACCEPTED_MAJOR_VERSIONS)}"
+            )
+        return self
+
+
+class QueueConfig(BaseModel):
+    """Bounded-queue capacities for the ingestion pipeline.
+
+    Every queue is bounded.  Unbounded queueing would let a fast
+    producer consume memory without limit, which is a failure mode that
+    surfaces as an out-of-memory kill rather than as a diagnosable
+    backpressure event.
+    """
+
+    ingestion_capacity: int = Field(default=1024, ge=1)
+    storage_capacity: int = Field(default=1024, ge=1)
+    broadcast_capacity: int = Field(default=256, ge=1)
+    operation_timeout_seconds: float = Field(
+        default=2.0,
+        gt=0.0,
+        description=(
+            "How long a critical message may wait for queue space before "
+            "the connection is failed. Non-critical messages are dropped "
+            "immediately instead of waiting."
+        ),
+    )
+
+
+class SessionsConfig(BaseModel):
+    """Where session recordings are written and how they are flushed."""
+
+    root_directory: str = Field(default="artifacts/sessions", min_length=1)
+    flush_every_events: int = Field(
+        default=1,
+        ge=1,
+        description="Events buffered before flushing to the OS. 1 = every event.",
+    )
+    atomic_summary: bool = Field(
+        default=True,
+        description="Write summary.json via a temporary file and atomic rename.",
+    )
+    recover_incomplete_sessions: bool = Field(
+        default=True,
+        description="Rebuild a summary from a partial event stream when reading.",
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        path = PurePosixPath(self.root_directory)
+        if path.is_absolute():
+            raise ValueError(
+                "sessions.root_directory must be a relative path inside the "
+                "project; absolute roots are rejected so a configuration "
+                "mistake cannot write outside the workspace"
+            )
+        if any(part == ".." for part in path.parts):
+            raise ValueError(
+                "sessions.root_directory must not contain '..' path segments"
+            )
+        if not self.atomic_summary:
+            raise ValueError(
+                "sessions.atomic_summary cannot be disabled: a non-atomic "
+                "summary write can leave a half-written summary.json that "
+                "reads as a valid but wrong session record"
+            )
+        return self
+
+
+class TaskConfig(BaseModel):
+    """Reaction-task geometry and synthetic-response behaviour.
+
+    The synthetic rates below describe how the **simulator** fabricates
+    responses.  They are software test parameters.  They are not
+    measurements, not participant data, and not a model of human
+    performance.
+    """
+
+    blocks: int = Field(default=2, ge=1)
+    trials_per_block: int = Field(default=10, ge=1)
+    stimulus_duration_ms: float = Field(default=800.0, gt=0.0)
+    response_timeout_ms: float = Field(default=1500.0, gt=0.0)
+    inter_trial_interval_ms: float = Field(default=500.0, ge=0.0)
+    default_difficulty: int = Field(default=1, ge=0)
+    synthetic_response_latency_ms: float = Field(
+        default=450.0,
+        gt=0.0,
+        description="Mean fabricated reaction time. SYNTHETIC, not measured.",
+    )
+    synthetic_error_rate: float = Field(
+        default=0.2, ge=0.0, le=1.0, description="Fabricated incorrect-response rate."
+    )
+    synthetic_timeout_rate: float = Field(
+        default=0.1, ge=0.0, le=1.0, description="Fabricated no-response rate."
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.synthetic_error_rate + self.synthetic_timeout_rate > 1.0:
+            raise ValueError(
+                "task.synthetic_error_rate + task.synthetic_timeout_rate must "
+                "not exceed 1.0; there would be no probability mass left for "
+                "correct responses"
+            )
+        if self.response_timeout_ms < self.stimulus_duration_ms:
+            raise ValueError(
+                "task.response_timeout_ms must not be shorter than "
+                "task.stimulus_duration_ms, otherwise a trial times out while "
+                "its stimulus is still on screen"
+            )
+        return self
+
+
+class ReplayConfig(BaseModel):
+    """Replay pacing limits."""
+
+    default_speed: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="1.0 = original timing. 0 = immediate, no sleeping.",
+    )
+    maximum_speed: float = Field(default=1000.0, gt=0.0)
+    preserve_original_timing: bool = Field(
+        default=True,
+        description="Pace by recorded inter-message gaps rather than a fixed rate.",
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.default_speed > self.maximum_speed:
+            raise ValueError(
+                "replay.default_speed must not exceed replay.maximum_speed"
+            )
+        return self
+
+
 # --- Root model ---
 
 
@@ -379,6 +633,14 @@ class EngageVRConfig(BaseModel):
     adaptation: AdaptationConfig = Field(default_factory=AdaptationConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     session: SessionConfig = Field(default_factory=SessionConfig)
+
+    # Milestone 4
+    server: ServerConfig = Field(default_factory=ServerConfig)
+    protocol: ProtocolSettings = Field(default_factory=ProtocolSettings)
+    queues: QueueConfig = Field(default_factory=QueueConfig)
+    sessions: SessionsConfig = Field(default_factory=SessionsConfig)
+    task: TaskConfig = Field(default_factory=TaskConfig)
+    replay: ReplayConfig = Field(default_factory=ReplayConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path | None = None) -> Self:

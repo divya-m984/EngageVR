@@ -471,3 +471,329 @@ normalization, and resampling in addition to filtering.
 
 **Consequence:** `docs/ARCHITECTURE.md` is updated to match the
 implemented module layout.
+
+---
+
+### DEC-025: One Shared Versioned Protocol, Not Per-Client Formats
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** Milestone 4 requires that "the Python simulator and Unity use
+the same versioned protocol". The tempting shortcut is a Python format plus
+a hand-maintained C# mirror, which drifts silently the first time a field is
+renamed.
+
+**Decision:** A single protocol lives in `src/engagevr/protocol/`. Its JSON
+Schema and a set of representative valid/invalid message fixtures are
+generated from the Pydantic models and **checked in** under `protocol/`.
+Both test suites — Python `tests/unit/test_protocol.py` and Unity
+`Assets/Tests/EditMode/ProtocolContractTests.cs` — parse those same files.
+
+**Consequence:** A field rename on either side fails the other side's tests.
+A test also asserts the checked-in schema matches the models, so the
+artefacts cannot drift from the code. Regeneration is one command:
+`uv run python scripts/generate_protocol_artifacts.py`.
+
+---
+
+### DEC-026: Replay Adds Metadata Rather Than Rewriting Messages
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** A replayed message must be distinguishable from a live one. Two
+approaches were available: rewrite the envelope's `source`/`session_id` to
+say "replay", or add a separate metadata block.
+
+**Decision:** Replay is **additive**. A replayed envelope keeps its original
+`source`, `sequence_number`, `message_id`, timestamps, and provenance
+untouched, and gains a `replay` block recording the source session, the
+replay session, the position in the replay stream, and the speed.
+
+Rewriting would have falsified the recording: the message really was
+produced by that source, at that sequence number, at that time. The
+distinguishing fact — that this *emission* is a replay — is a property of the
+emission, not of the message, and is recorded as such.
+
+**Consequence:** A replayed synthetic message carries `SYNTHETIC` in
+provenance **and** `REPLAY` in the replay block, simultaneously. Because the
+`session_id` is preserved, the backend matches a replayed message on
+`replay.replay_session_id`; a *live* message for the wrong session is still
+rejected with `session_mismatch`. Asserted by tests on both paths.
+
+---
+
+### DEC-027: Backpressure Drops Non-Critical Telemetry, Never Critical Messages
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** Bounded queues force a choice when full: block, drop, or fail.
+Blocking indefinitely converts a slow disk into a hung process; dropping
+everything makes a recording untrustworthy; unbounded queueing turns a fast
+producer into an out-of-memory kill that surfaces with no diagnosis.
+
+**Decision:** Every queue is bounded and configurable. On a full queue:
+
+- **Critical messages** (`session_start`, `session_end`,
+  `adaptation_command`, `adaptation_acknowledgement`, `protocol_error`, and
+  any `task_event` carrying `task_completed`) wait up to
+  `queues.operation_timeout_seconds`. If space never appears the connection
+  is **failed** with a `queue_full` protocol error. They are never dropped.
+- **Non-critical messages** are dropped immediately rather than blocking.
+- A full **broadcast** queue never costs a stored event: observers are
+  read-only monitors, so their copy is dropped and warned about while
+  ingestion continues.
+
+**Consequence:** No drop is silent. Every drop is counted per message type in
+the summary, written to `dropped.jsonl` with the queue that was full and a
+reason, and warned about in the session log — so a gap in `events.jsonl` is
+always *explained* rather than merely absent. `task_completed` is treated as
+critical specifically so that a truncated recording can never be mistaken for
+a finished one.
+
+---
+
+### DEC-028: Arrival Order and Sequence Order Are Recorded Separately
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** Messages can arrive out of sequence order. The storage layer
+could sort them into sequence order on write, producing a tidy file.
+
+**Decision:** It does not. `events.jsonl` preserves **arrival order**, byte
+for byte, append-only, and is never re-sorted. Each line carries both
+`ingestion.arrival_index` and `envelope.sequence_number`, so either order is
+recoverable. Discrepancies — duplicate ids, duplicate sequence numbers,
+reversal, missing ranges, future timestamps, excessive delay — are recorded
+as typed anomalies on the affected message and **not repaired**.
+
+**Consequence:** A recording containing a genuine sequence reversal replays
+that reversal. Sorting on write would have destroyed the evidence of what
+actually happened, which is the one thing a recording exists to preserve.
+
+---
+
+### DEC-029: Clock Offset Is an Estimate With Stated Uncertainty; Delay Is Often Unavailable
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** It is tempting to report `server_received_at_utc - sent_at_utc`
+as "transport latency". Across two machines that subtraction measures the
+*clock offset* between them far more than it measures delay.
+
+**Decision:**
+
+- `apparent_transport_delay_seconds` is populated **only** when sender and
+  receiver share one clock (in-process). Across processes it is `null`, with
+  `delay_unavailable_reason` stating why.
+- Clock offset is estimated only from heartbeat round trips, using the
+  standard four-timestamp formula, and is always accompanied by
+  `offset_uncertainty_seconds = rtt / 2` and an explicit
+  `symmetric_delay_assumed = True` flag.
+- The sender's monotonic clock is preserved verbatim and never translated
+  onto the receiver's timeline; the two have unrelated origins.
+
+**Consequence:** No output of this system claims that two independent
+machines' clocks are synchronized. A `future_timestamp` anomaly is reported
+as a *clock* observation and never causes a message to be rejected.
+
+---
+
+### DEC-030: Unity Uses a Hand-Written JSON Serializer, Not JsonUtility
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** Unity's built-in `JsonUtility` is the zero-dependency default
+for JSON in Unity.
+
+**Decision:** It is **not** used. `JsonUtility` cannot represent `null`: it
+serializes a null string as `""` and a nullable number as `0`, and on
+deserialization leaves absent fields at their default. The EngageVR protocol
+depends on the difference between "no response" (`null`) and "a response of
+0 ms". Using `JsonUtility` would silently convert every missed trial into a
+zero-latency response — precisely the failure the Python schema forbids. It
+also cannot serialize dictionaries or top-level arrays.
+
+`Assets/Scripts/Protocol/Json.cs` is a small dependency-free reader/writer in
+which `null` is a first-class kind. It refuses to serialize `NaN` or
+`Infinity` rather than substituting a placeholder.
+
+`com.unity.nuget.newtonsoft-json` would also have worked, but adding a
+package dependency that has not been resolved or compiled in this repository
+would be an unverified claim.
+
+**Consequence:** A test asserts the fixtures contain no `NaN`/`Infinity` and
+no construct the C# reader cannot represent, and a C# test asserts that
+`null`, `""`, and `0` remain distinct through a round trip.
+
+---
+
+### DEC-031: Unity Uses System.Net.WebSockets, Not a Third-Party Package
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** Unity has no built-in WebSocket component, and several
+third-party packages exist. The milestone brief forbids adding an unverified
+third-party WebSocket package automatically.
+
+**Decision:** `System.Net.WebSockets.ClientWebSocket` is used. It ships with
+the .NET Standard 2.1 base class library that Unity's Mono and IL2CPP
+backends expose, so it needs no package, no manifest entry, and no licence
+review, and it works in the Editor and in Windows/macOS/Linux standalone
+players.
+
+**Compatibility rationale and limitation:** `ClientWebSocket` is *not*
+supported on the WebGL player, where the browser owns the socket. EngageVR
+targets a desktop player, so this is not a constraint; a WebGL build would
+need a JavaScript interop bridge and is out of scope.
+
+Send and receive run on background tasks that touch no Unity API; inbound
+messages are dispatched on the main thread by `Poll()` from `Update`.
+
+**Consequence:** No third-party dependency, no licence question, and no
+package that this repository cannot verify. Recorded in
+`docs/UNITY_SETUP.md`. The Unity project has **not** been compiled or run.
+
+---
+
+### DEC-032: The Unity Project Ships Source Only, With No Fabricated ProjectVersion
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** `unity/EngageVR/` was an empty directory. A "complete" Unity
+project would normally include `ProjectSettings/ProjectVersion.txt` naming
+an editor version.
+
+**Decision:** No `ProjectVersion.txt` is written. This repository has no
+Unity Editor installed and cannot verify which version the project opens
+under; asserting one would be a claim it has not tested. Unity Hub asks on
+first open. `Packages/manifest.json` and assembly definitions *are* checked
+in, because those are declarations the repository can stand behind.
+
+The demo scene is likewise **generated from an editor script** rather than
+checked in as a serialized `.unity` asset, keeping the repository free of
+binary-ish blobs that cannot be reviewed in a diff.
+
+**Consequence:** `docs/UNITY_SETUP.md` states plainly that Unity compilation
+and runtime validation are pending, and the Unity acceptance criteria are
+recorded as **not met** in `docs/PROGRESS.md`.
+
+---
+
+### DEC-033: Task Telemetry Is Software Measurement, Never a Psychological Construct
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** A reaction task produces accuracy and reaction-time numbers that
+look like the dependent variables of a cognitive experiment.
+
+**Decision:** They are treated as **software telemetry** throughout. The
+schema docstring, the wire documentation, the CLI output, the session
+manifest, the session summary, and the Unity HUD all state that these are not
+engagement, attention, cognitive-load, or fatigue measurements, and that the
+task has not been experimentally designed, piloted, or approved.
+
+The protocol payload models are closed (`extra="forbid"`), so an engagement
+or cognitive-load value is not merely absent from a recording — it is not
+*representable* in one.
+
+**Consequence:** Tests assert that no recording, no fixture, and no Unity
+message contains the tokens `engagement`, `cognitive_load`, `attention`, or
+`fatigue`, and that the backend answers a run of ten consecutive timeouts
+with acknowledgements rather than an adaptation command.
+
+---
+
+### DEC-034: Milestone 4 Implements Adaptation Transport Only
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** The adaptation schemas exist from Milestone 1, and the transport
+needed to move a command from backend to client is in scope for Milestone 4.
+Policy is Milestone 8.
+
+**Decision:** Commands are **transported**, never **decided**. Every command
+in this milestone is issued manually via `POST /sessions/{id}/commands` or by
+a test script. There is no policy, no cooldown, no hysteresis, and no
+personalization anywhere in the code. No field or message asserts that
+applying a command improves engagement or any other outcome; `reason` is an
+audit note supplied by whoever issued the command.
+
+A repeated `command_id` is acknowledged with `duplicate: true` and is **not**
+re-applied, so a retransmission cannot double-step the difficulty. The
+accept/reject rules live in one place (`engagevr/task/state.py`) and are
+mirrored by the Unity `AdaptationReceiver`, so both clients behave
+identically.
+
+**Consequence:** A test asserts that ten consecutive `response_timeout`
+events produce zero commands, so the absence of a policy cannot be silently
+undone.
+
+---
+
+### DEC-035: Two Modules Beyond the Milestone 4 Filename List
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** The Milestone 4 brief lists module filenames and permits
+adjustment for a documented architectural reason.
+
+**Decision:** Three modules exist beyond that list:
+
+- `src/engagevr/api/broker.py` — the bounded-queue ingestion pipeline.
+  Placing it in `connections.py` would mix connection identity with
+  backpressure policy, which are separately configured and separately
+  tested.
+- `src/engagevr/api/state.py` — the lifespan-owned application state.
+  Keeping it out of `app.py` lets the routes and the WebSocket handler share
+  it without importing the application factory, which would be circular.
+- `src/engagevr/transport.py` — the transport abstraction shared by the task
+  simulator and the replay player. It belongs to neither package, and
+  duplicating it in both was the alternative.
+
+`src/engagevr/cli_milestone4.py` holds the four new CLI commands so
+`__main__.py` stays a thin dispatcher and the new commands can be tested
+without importing the webcam or rPPG code paths.
+
+`src/engagevr/schemas/protocol.py` is a pure re-export of the models in
+`engagevr.protocol`, so `engagevr.schemas` remains the single place to look
+for every data contract without creating a second, divergent definition.
+
+**Consequence:** `docs/ARCHITECTURE.md` is updated to match the implemented
+module layout.
+
+---
+
+### DEC-036: httpx2 Rather Than httpx for the Test Client
+
+**Date:** 2026-08-02
+**Status:** Accepted
+
+**Context:** The milestone brief anticipated `httpx` as the development
+dependency that `fastapi.testclient` imports. Starlette 1.3.1 emits a
+`StarletteDeprecationWarning` when used with `httpx` and declares
+`httpx2>=2.0.0` alongside it.
+
+**Decision:** `httpx2>=2.9,<3` is the declared development dependency.
+Pinning the deprecated path would have meant importing a warning into every
+test run.
+
+`pytest-asyncio>=1.0,<2` is also added: the backend, simulator, and replay
+player are async, and the alternative was to depend on the `anyio` pytest
+plugin, which reaches this project only as an undeclared transitive
+dependency of Starlette.
+
+**Consequence:** Verified against Python 3.12.13 — fastapi 0.141.1,
+uvicorn 0.52.1, websockets 17.0.1, httpx2 2.9.1, pytest-asyncio 1.4.0. No
+Redis, PostgreSQL, MongoDB, Kafka, RabbitMQ, Celery, MLflow, DVC, Streamlit,
+React, Node.js, or Docker was added. One OpenCV wheel variant remains.

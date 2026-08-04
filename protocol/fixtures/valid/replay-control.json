@@ -1,0 +1,22 @@
+{
+  "correlation_id": null,
+  "message_id": "fixture-replay-control",
+  "message_type": "replay_control",
+  "payload": {
+    "action": "start",
+    "source_session_id": "recorded-session",
+    "speed": 5.0
+  },
+  "protocol_version": "1.0",
+  "provenance": {
+    "data_source": "live",
+    "producer": "engagevr.protocol.fixtures",
+    "synthetic_label": null
+  },
+  "replay": null,
+  "sent_at_monotonic_seconds": 1000.0,
+  "sent_at_utc": "2026-01-01T12:00:00Z",
+  "sequence_number": 0,
+  "session_id": "fixture-session",
+  "source": "replay"
+}

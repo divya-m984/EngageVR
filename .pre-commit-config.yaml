@@ -1,8 +1,12 @@
 repos:
+  # Pinned to the same ruff the project depends on. A mismatch makes
+  # 'pre-commit run' and 'make lint' disagree: rules are added and removed
+  # between ruff releases, so an older hook can fail code the project's own
+  # linter accepts.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.12.0
+    rev: v0.16.1
     hooks:
-      - id: ruff
+      - id: ruff-check
         args: [--fix]
       - id: ruff-format
 

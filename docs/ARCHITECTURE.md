@@ -45,7 +45,7 @@ Acquires raw signals from available sources.
 | `face/features.py` | Blink rate, eye-closure, mouth movement, landmark motion |
 | `head_pose/estimator.py` | Yaw, pitch, roll estimation from landmarks |
 | `head_pose/features.py` | Velocity, variability, stability metrics |
-| `task/events.py` | Task-performance event ingestion |
+| `task/simulator.py` | Deterministic SYNTHETIC task simulator (M4) |
 | `questionnaires/collector.py` | Subjective feedback capture (generic, configurable) |
 | `simulator/synthetic.py` | Deterministic synthetic stream generator |
 | `capture/adapters.py` | Abstract adapter interface for future wearable sensors |
@@ -167,10 +167,29 @@ Defines typed schemas, manages storage, and aligns timestamps.
 | `datasets/base.py` | Abstract dataset adapter interface |
 | `datasets/ubfc_rppg.py` | UBFC-rPPG adapter (no download; see `docs/DATASETS.md`) |
 | `schemas/questionnaire.py` | Subjective response schema |
-| `synchronization/clock.py` | Common monotonic timestamp source |
-| `storage/parquet.py` | Parquet read/write for time-series data |
-| `storage/session_db.py` | SQLite session summary storage |
+| `schemas/events.py` | Task-event vocabulary and `TaskEventDetail` (extended in M4) |
+| `synchronization/clock.py` | Clock abstraction; RTT-bounded offset *estimates* (M4) |
+| `synchronization/ordering.py` | Sequence and message-id anomaly detection (M4) |
+| `storage/session_store.py` | Session directories, recovery, path safety (M4) |
+| `storage/jsonl.py` | Append-only JSON Lines and atomic JSON writes (M4) |
+| `storage/manifest.py` | Manifest, ingestion metadata, summary, drop records (M4) |
+| `storage/parquet.py` | Parquet read/write for time-series data | **Deferred** |
+| `storage/session_db.py` | SQLite session summary storage | **Deferred** |
 | `datasets/adapter.py` | Abstract dataset adapter interface |
+
+#### Timing and ordering invariants (Milestone 4)
+
+- Three timestamps are kept distinct and never conflated: the sender's wall
+  clock, the sender's own monotonic clock, and the receiver's ingestion wall
+  clock. Nothing translates one onto another's timeline.
+- Transport delay is computed **only** within one process. Across processes
+  the field is null with a stated reason, because subtracting two
+  independent wall clocks measures clock offset, not delay (DEC-029).
+- Clock offset is estimated only from heartbeat round trips and always
+  carries `rtt/2` uncertainty and an explicit symmetric-delay assumption.
+- Arrival order and source sequence order are recorded **separately** and the
+  event stream is never re-sorted; anomalies are recorded, not repaired
+  (DEC-028).
 
 ### 5. Machine-Learning Layer (`src/engagevr/training/`, `inference/`, `uncertainty/`, `personalization/`)
 
@@ -197,13 +216,57 @@ Maps model outputs to environment-change commands with safety controls.
 
 ### 7. API Layer (`src/engagevr/api/`)
 
-FastAPI application providing WebSocket and HTTP endpoints.
+Local FastAPI application providing HTTP endpoints and a WebSocket bridge.
+Implemented in Milestone 4.
+
+| Module | Responsibility | Status |
+|--------|---------------|--------|
+| `api/app.py` | Application factory and lifespan-owned resources | Implemented (M4) |
+| `api/routes.py` | HTTP endpoints; manual adaptation-command entry point | Implemented (M4) |
+| `api/websocket.py` | `/ws/v1/sessions/{session_id}` bridge and handshake | Implemented (M4) |
+| `api/connections.py` | Single-process connection registry and routing | Implemented (M4) |
+| `api/broker.py` | Bounded ingestion/storage/broadcast queues (DEC-035) | Implemented (M4) |
+| `api/state.py` | Session store, registry, and live brokers (DEC-035) | Implemented (M4) |
+| `api/errors.py` | Typed protocol errors and HTTP error handlers | Implemented (M4) |
+
+**Deployment scope:** one process, bound to loopback, with no
+authentication, authorization, or transport encryption. The connection
+registry lives in one process's memory, so multi-worker and distributed
+operation are **not supported**; a command routed by one worker would never
+reach a client connected to another.
+
+### 7b. Protocol Layer (`src/engagevr/protocol/`)
+
+The single versioned wire contract shared by the backend, the Python
+simulator, the replay player, and the Unity client (DEC-025).
 
 | Module | Responsibility |
 |--------|---------------|
-| `api/app.py` | FastAPI application factory |
-| `api/websocket.py` | WebSocket bridge for Unity/simulator |
-| `api/routes.py` | REST endpoints for session management, replay |
+| `protocol/version.py` | Version constants, parsing, major-version acceptance |
+| `protocol/messages.py` | 14 message types, 5 sources, closed payload models |
+| `protocol/envelope.py` | Envelope, provenance, additive replay metadata |
+| `protocol/validation.py` | Size, JSON, version, type, envelope, payload checks |
+| `protocol/json_schema.py` | Deterministic JSON Schema generation |
+| `schemas/protocol.py` | Pure re-export into the schemas namespace |
+| `transport.py` | In-process, JSONL-file, and WebSocket transports (DEC-035) |
+
+### 7c. Task Environment (`src/engagevr/task/`)
+
+| Module | Responsibility |
+|--------|---------------|
+| `task/config.py` | Per-run simulator settings and scripted scenarios |
+| `task/generator.py` | Deterministic seeded trial plan |
+| `task/state.py` | Task state machine and adaptation-command application |
+| `task/simulator.py` | The simulator loop; injected clock and RNG |
+| `unity/EngageVR/` | Unity desktop task (source only; **not compiled**) |
+
+### 7d. Replay (`src/engagevr/replay/`)
+
+| Module | Responsibility |
+|--------|---------------|
+| `replay/reader.py` | Read-only recording access and filtering |
+| `replay/clock.py` | Pacing: immediate, original, accelerated |
+| `replay/player.py` | Emission with additive replay metadata (DEC-026) |
 
 ### 8. Dashboard (`src/engagevr/dashboard/`)
 
@@ -241,7 +304,7 @@ Streamlit multi-page dashboard for monitoring and analysis.
 |-----------|-----------|
 | Language | Python 3.12 |
 | Package manager | uv |
-| Web framework | FastAPI |
+| Web framework | FastAPI 0.141 + uvicorn 0.52 |
 | Data validation | Pydantic v2 |
 | Computer vision | OpenCV, MediaPipe |
 | Numerics | NumPy, SciPy |
@@ -249,7 +312,7 @@ Streamlit multi-page dashboard for monitoring and analysis.
 | ML | scikit-learn, XGBoost |
 | Deep learning | PyTorch (deferred) |
 | Dashboard | Streamlit, Plotly |
-| Storage | Parquet, SQLite |
+| Storage | JSON Lines (M4); Parquet, SQLite (deferred) |
 | Experiment tracking | MLflow (incremental) |
 | Data versioning | DVC (incremental) |
 | Linting | Ruff |
@@ -258,7 +321,7 @@ Streamlit multi-page dashboard for monitoring and analysis.
 | CI | GitHub Actions |
 | Containers | Docker (incremental) |
 | Game engine | Unity (C#, desktop first) |
-| Communication | WebSocket (FastAPI) |
+| Communication | WebSocket (websockets 17), protocol version 1.0 |
 
 ## Configuration
 
@@ -288,6 +351,29 @@ at startup. No configuration is hard-coded in source files. Sensitive values
 - Nothing in the rPPG pipeline infers skin tone, ethnicity, identity,
   emotion, engagement, or cognitive state from a ROI.
 - No dataset is downloaded; no data leaves the local machine.
+
+### Session-recording privacy behaviour (Milestone 4)
+
+- A session recording contains protocol envelopes and receiver ingestion
+  metadata only.
+- Raw webcam frames, video, image data, MediaPipe objects, landmark arrays,
+  engagement estimates, cognitive-load estimates, model predictions, heart
+  rates, secrets, and real-world identities are **not representable** in a
+  recording: the protocol payload models are closed (`extra="forbid"`) and
+  the store writes only what arrived through that wire format.
+- Participants appear as a pseudonymous `participant_id` only.
+- Session identifiers are validated against a strict allowlist before
+  becoming directory names, and the resolved path is checked to be inside
+  the session root, so path traversal cannot escape it.
+- `artifacts/` remains gitignored.
+
+### Data-labelling invariants
+
+- A `synthetic` message must carry `synthetic_label: "SYNTHETIC"`; a
+  non-synthetic message must carry `null`. Both are schema-enforced.
+- A replayed message keeps its original provenance and *gains* a `REPLAY`
+  block, so a replayed synthetic message carries both labels at once
+  (DEC-026).
 
 ## Synthetic Data Policy
 

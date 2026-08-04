@@ -1,0 +1,35 @@
+{
+  "correlation_id": null,
+  "message_id": "fixture-task-event-stimulus-presented",
+  "message_type": "task_event",
+  "payload": {
+    "event": {
+      "block_id": 0,
+      "difficulty_level": 1,
+      "event_type": "stimulus_presented",
+      "expected_response": "j",
+      "observed_response": null,
+      "reaction_time_ms": null,
+      "response_correct": null,
+      "response_outcome": null,
+      "stimulus_category": "square",
+      "stimulus_id": "square-b0t3",
+      "task_elapsed_ms": 4200.0,
+      "task_id": "reaction_task_v1",
+      "trial_elapsed_ms": 500.0,
+      "trial_id": 3
+    }
+  },
+  "protocol_version": "1.0",
+  "provenance": {
+    "data_source": "synthetic",
+    "producer": "engagevr.protocol.fixtures",
+    "synthetic_label": "SYNTHETIC"
+  },
+  "replay": null,
+  "sent_at_monotonic_seconds": 1002.0,
+  "sent_at_utc": "2026-01-01T12:00:00",
+  "sequence_number": 2,
+  "session_id": "fixture-session",
+  "source": "unity_client"
+}

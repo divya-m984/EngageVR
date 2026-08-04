@@ -1,0 +1,30 @@
+{
+  "correlation_id": "fixture-client-hello",
+  "message_id": "fixture-server-hello",
+  "message_type": "server_hello",
+  "payload": {
+    "accepted": true,
+    "assigned_client_id": "fixture-client",
+    "connection_timeout_seconds": 30.0,
+    "heartbeat_interval_seconds": 10.0,
+    "maximum_message_bytes": 262144,
+    "protocol_version": "1.0",
+    "rejection_reason": null,
+    "server_name": "engagevr-backend",
+    "server_time_utc": "2026-01-01T12:00:00Z",
+    "server_version": "0.1.0",
+    "session_id": "fixture-session"
+  },
+  "protocol_version": "1.0",
+  "provenance": {
+    "data_source": "live",
+    "producer": "engagevr.protocol.fixtures",
+    "synthetic_label": null
+  },
+  "replay": null,
+  "sent_at_monotonic_seconds": 1000.0,
+  "sent_at_utc": "2026-01-01T12:00:00Z",
+  "sequence_number": 0,
+  "session_id": "fixture-session",
+  "source": "backend"
+}

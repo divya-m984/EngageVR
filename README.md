@@ -8,20 +8,23 @@
 
 ## Status
 
-**Milestone 3 -- Interpretable rPPG Signal-Processing Pipeline**
-implementation complete; physical-webcam and public-dataset validation
-pending.
+**Milestone 4 -- Task Environment, Simulator, Real-Time Bridge, and
+Replay.** Backend, Python simulator, shared protocol, session storage, and
+replay implementation complete; **Unity compilation and runtime validation
+pending** (no Unity Editor is installed in this environment).
 
-Implemented: webcam capture, face landmarks (MediaPipe), behavioural
-proxy features (EAR, blink, mouth, head pose), capture quality, and a
-classical rPPG pipeline — skin ROI extraction, RGB traces, GREEN /
-CHROM / POS extraction, Butterworth band-pass filtering, spectral
-heart-rate estimation, an interpretable signal-quality index, and a
-UBFC-rPPG dataset adapter.
+Implemented: webcam capture, face landmarks (MediaPipe), behavioural proxy
+features, capture quality, a classical rPPG pipeline (GREEN / CHROM / POS,
+spectral heart rate, interpretable quality index, UBFC-rPPG adapter), and —
+new in Milestone 4 — a shared versioned protocol (`1.0`), a deterministic
+task simulator, a local FastAPI + WebSocket bridge with bounded-queue
+backpressure, append-only JSONL session storage with crash recovery,
+deterministic session replay, and a Unity desktop task at source level.
 
-Not implemented: ML models, cognitive-load models, multimodal fusion,
-personalization, HRV, FastAPI, Streamlit, Unity, MLflow, DVC, deep
-learning.
+Not implemented: ML models, engagement models, cognitive-load models,
+multimodal fusion, uncertainty calibration, personalization, adaptation
+*policy* (Milestone 4 implements command **transport** only), HRV, Streamlit,
+MLflow, DVC, Docker, deep learning.
 
 > **rPPG heart-rate values are signal-processing estimates from camera
 > data.** They are not medical measurements, have not been validated
@@ -158,6 +161,108 @@ this environment. No MAE, RMSE, bias, or coverage figure against any
 public dataset exists in this repository, and error metrics are only
 ever computed against genuine reference physiological signals.
 
+## Task Environment, Backend, and Replay (Milestone 4)
+
+Everything below runs locally with **no Unity, no webcam, no model asset, no
+display server, and no internet access**.
+
+> The local backend has **no authentication, no authorization, and no
+> transport encryption.** It binds to loopback by default; binding elsewhere
+> requires an explicit flag. Do not expose it to a network.
+
+### End-to-end demonstration
+
+Terminal 1 — start the backend:
+
+```bash
+uv run python -m engagevr serve \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --session-root artifacts/sessions
+```
+
+Terminal 2 — run the SYNTHETIC task simulator against it:
+
+```bash
+uv run python -m engagevr task-sim \
+  --seed 42 \
+  --blocks 2 \
+  --trials-per-block 10 \
+  --connect ws://127.0.0.1:8000/ws/v1/sessions/demo-session
+```
+
+Then inspect and replay the recording:
+
+```bash
+uv run python -m engagevr session-inspect artifacts/sessions/demo-session
+
+uv run python -m engagevr session-replay \
+  artifacts/sessions/demo-session \
+  --speed 0
+```
+
+Fully offline, with no server at all:
+
+```bash
+uv run python -m engagevr task-sim \
+  --seed 42 --blocks 2 --trials-per-block 10 --speed 10 \
+  --output artifacts/task-session
+```
+
+### What the task telemetry is
+
+> Task accuracy, reaction time, and timeout counts are **software
+> telemetry**. They are NOT engagement, attention, cognitive-load, or
+> fatigue measurements. The task has not been experimentally designed,
+> piloted, or approved. Every simulated response is fabricated from a seed:
+> no person performs the simulated task.
+
+### Protocol
+
+Protocol version **1.0**, shared by the backend, the Python simulator, the
+replay player, and the Unity client. The JSON Schema and contract fixtures
+are checked in under `protocol/` and are parsed by **both** the Python and
+the Unity test suites, so the two cannot drift apart. See
+[docs/PROTOCOL.md](docs/PROTOCOL.md).
+
+```bash
+uv run python scripts/generate_protocol_artifacts.py   # regenerate
+```
+
+### Session recordings
+
+```
+artifacts/sessions/<session-id>/
+  manifest.json   events.jsonl   summary.json   dropped.jsonl
+```
+
+Append-only JSON Lines, atomic summary, crash recovery with 1-based
+malformed-line numbers. A recording contains protocol envelopes and receiver
+ingestion metadata **only** — no frames, no video, no landmarks, no
+predictions, no engagement or cognitive-load values, no real-world identity.
+See [docs/SESSION_FORMAT.md](docs/SESSION_FORMAT.md).
+
+### Replay
+
+Replay preserves every original message and **adds** separate replay
+metadata. A replayed synthetic message carries `SYNTHETIC` *and* `REPLAY`.
+The source recording is opened read-only and is never modified. See
+[docs/REPLAY.md](docs/REPLAY.md).
+
+### Adaptation
+
+Milestone 4 implements command **transport** only — there is no policy, no
+cooldown, no hysteresis, and no personalization. Commands are issued
+manually or by a test script, and nothing claims that applying one improves
+engagement or any other outcome.
+
+### Unity desktop task
+
+Source only, at `unity/EngageVR/`. **It has not been compiled or executed**:
+no Unity Editor is installed in this environment. See
+[docs/UNITY_SETUP.md](docs/UNITY_SETUP.md).
+
+
 ## Privacy
 
 - Raw video is never stored by default.
@@ -168,6 +273,11 @@ ever computed against genuine reference physiological signals.
   and estimates — never frames, per-sample pixel arrays, or identifiers.
 - Nothing infers skin tone, ethnicity, identity, or emotion.
 - No data leaves the local machine.
+- Session recordings contain protocol messages and receiver metadata only.
+  Frames, video, landmarks, model predictions, engagement values,
+  cognitive-load values, secrets, and real-world identities are not
+  representable in one.
+- Session identifiers are pseudonymous and validated against path traversal.
 
 ## Project Structure
 
@@ -182,9 +292,19 @@ src/engagevr/         Python package
   head_pose/          Head-pose estimation and motion features
   rppg/               ROI, RGB trace, GREEN/CHROM/POS, HR, quality
   datasets/           Public-dataset adapters (no downloading)
-  simulator/          Synthetic data generation
+  simulator/          Synthetic data generation (Milestone 1)
+  protocol/           Shared versioned wire protocol (M4)
+  transport.py        In-process / JSONL / WebSocket transports (M4)
+  task/               Deterministic SYNTHETIC task simulator (M4)
+  api/                FastAPI backend and WebSocket bridge (M4)
+  synchronization/    Clock and ordering diagnostics (M4)
+  storage/            Append-only JSONL session recordings (M4)
+  replay/             Deterministic session replay (M4)
+  cli_milestone4.py   serve / task-sim / session-inspect / session-replay
 configs/              YAML configuration files
-scripts/              Model download and setup scripts
+protocol/             Checked-in JSON Schema and contract fixtures (M4)
+scripts/              Model download, protocol-artefact generation
+unity/EngageVR/       Unity desktop task, source only (NOT compiled)
 tests/                pytest test suite
 docs/                 Project documentation
 ```
@@ -199,6 +319,11 @@ docs/                 Project documentation
 - [Progress](docs/PROGRESS.md)
 - [Datasets](docs/DATASETS.md)
 - [Method References](docs/REFERENCES.md)
+- [Protocol](docs/PROTOCOL.md)
+- [Task Simulator](docs/TASK_SIMULATOR.md)
+- [Session Format](docs/SESSION_FORMAT.md)
+- [Replay](docs/REPLAY.md)
+- [Unity Setup and Status](docs/UNITY_SETUP.md)
 
 ## Disclaimer
 
@@ -206,7 +331,9 @@ EngageVR is research software. Its rPPG heart-rate values are
 signal-processing estimates from camera data, not medical measurements,
 and **must not be used for any medical, diagnostic, screening, or
 monitoring purpose.** Its engagement and cognitive-load outputs are model
-estimates and are not psychological or clinical conclusions.
+estimates and are not psychological or clinical conclusions. Its task
+telemetry is a software measurement, not a measurement of attention,
+cognition, workload, or fatigue.
 
 ## License
 
