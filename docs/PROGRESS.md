@@ -230,7 +230,91 @@ temporary deterministic fixtures only. No dataset metric exists.
 
 ### Milestone 4: Task Environment and Simulator
 
-**Status:** Not started
+**Status:** Backend, Python simulator, shared protocol, session storage, and
+replay **COMPLETE** (2026-08-02). Unity compilation and runtime validation
+**PENDING** (no Unity Editor installed).
+
+**Delivered:**
+
+- **Shared versioned protocol `1.0`** (`src/engagevr/protocol/`): typed
+  envelope, 14 message types, 5 sources, closed payload models, full inbound
+  validation pipeline, generated JSON Schema, 19 valid and 12 invalid
+  contract fixtures shared with the Unity test suite (DEC-025).
+- **Task-event schema extended, not replaced**: 11 new `EventType` members,
+  `TASK_EVENT_TYPES`, `ResponseOutcome`, and `TaskEventDetail` carrying the
+  full identifier and response field set. Timeout is distinct from
+  incorrect; a missing response stays `None` (DEC-033).
+- **Deterministic Python task simulator** (`src/engagevr/task/`): seeded
+  trial plan, injected clock and RNG, real-time / accelerated / immediate
+  modes with identical event content, pause / disconnect / abort scenarios,
+  graceful cancellation, in-process / file / WebSocket transports.
+- **Local FastAPI backend** (`src/engagevr/api/`): 7 HTTP endpoints plus a
+  manual-command endpoint, `/ws/v1/sessions/{session_id}`, handshake, typed
+  acknowledgements and protocol errors, heartbeat round trips, observer
+  broadcast, targeted command routing, lifespan-owned resources.
+- **Bounded-queue backpressure** (DEC-027): critical messages never dropped,
+  non-critical drops counted, logged, and written to `dropped.jsonl`.
+- **Clock and ordering diagnostics** (`src/engagevr/synchronization/`,
+  DEC-028, DEC-029): RTT-bounded offset *estimates*, seven anomaly types
+  recorded and never repaired, arrival order and sequence order kept
+  separate.
+- **Session storage** (`src/engagevr/storage/`): append-only JSONL, atomic
+  summary, crash recovery with 1-based malformed-line numbers, path-traversal
+  rejection.
+- **Deterministic replay** (`src/engagevr/replay/`): four pacing modes,
+  filtering, in-process and WebSocket output, additive replay metadata
+  (DEC-026), source recording never modified.
+- **CLI**: `serve`, `task-sim`, `session-inspect`, `session-replay`.
+- **Unity desktop task** (`unity/EngageVR/`): 10 C# source files, 3 test
+  files, asmdefs, editor scene generator, dependency-free JSON with
+  first-class `null` (DEC-030), `ClientWebSocket` transport (DEC-031),
+  offline mock transport. **Not compiled, not executed** (DEC-032).
+- **Documentation**: `docs/PROTOCOL.md`, `docs/TASK_SIMULATOR.md`,
+  `docs/SESSION_FORMAT.md`, `docs/REPLAY.md`, `docs/UNITY_SETUP.md`.
+
+**Dependencies added:** fastapi 0.141.1, uvicorn 0.52.1, websockets 17.0.1
+(runtime); httpx2 2.9.1, pytest-asyncio 1.4.0 (development). Verified against
+Python 3.12.13. No database, broker, or container dependency (DEC-036).
+
+**Verification:**
+- `uv lock --check` -- resolved
+- `uv sync --locked` -- clean
+- `uv tree` -- no duplicate or conflicting packages; one OpenCV wheel
+- `uv run ruff format --check .` -- all files formatted
+- `uv run ruff check .` -- all checks passed
+- `uv run mypy src` -- no issues in 73 source files
+- `uv run pytest` -- **747 passed, 1 skipped**
+- `uv run pytest -m hardware` -- 1 skipped (no physical webcam)
+- `uv run pre-commit run --all-files` -- all passed
+- `make check` -- all passed
+- End-to-end demo (serve -> task-sim over WebSocket -> inspect -> replay) --
+  executed successfully; also covered by an automated test that starts a
+  loopback server in-process.
+
+**Milestone 4 acceptance criteria:**
+
+| Criterion | Status |
+|-----------|--------|
+| 1. The backend works without Unity | **Met.** Every test runs with no Unity. The full demo is Python-only. |
+| 2. The Python simulator and Unity use the same versioned protocol | **Partially met.** One protocol definition, one generated schema, one fixture set parsed by both test suites. The Python half is verified; the Unity half is **unverified** because the C# has not been compiled or executed. |
+| 3. A complete recorded session can be replayed deterministically | **Met.** Asserted by tests for ordering, byte-stable output, and an unmodified source recording. |
+| 4. Every transmitted and persisted message is typed and validated | **Met.** Closed Pydantic models on the wire and re-validated on read from disk. |
+| 5. No scientific, psychological, clinical, engagement, or cognitive-load conclusions | **Met.** Not representable in the payload models; asserted by tests over recordings, fixtures, and CLI output. |
+
+**Not met / pending:**
+1. Unity compilation, EditMode and PlayMode test execution, and any player
+   build. No Unity Editor or Unity Hub is installed; Unity was not
+   downloaded automatically.
+2. Consequently, criterion 2 cannot be reported as fully met.
+
+**Decisions recorded:** DEC-025 through DEC-036 (see `docs/DECISIONS.md`)
+
+**Remaining validation for this milestone:**
+1. Install a supported Unity LTS, open `unity/EngageVR`, compile, and run the
+   EditMode and PlayMode suites; record the exact editor version and
+   commands in `docs/UNITY_SETUP.md`.
+2. Run the Unity client against the live backend and confirm the handshake,
+   task telemetry, and adaptation acknowledgement paths end to end.
 
 ### Milestone 5: Baseline Models
 

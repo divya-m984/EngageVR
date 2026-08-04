@@ -1,0 +1,1465 @@
+{
+  "$defs": {
+    "AcknowledgementPayload": {
+      "additionalProperties": false,
+      "description": "Backend confirmation that one message was accepted and handled.",
+      "properties": {
+        "acknowledged_message_id": {
+          "title": "Acknowledged Message Id",
+          "type": "string"
+        },
+        "acknowledged_message_type": {
+          "$ref": "#/$defs/MessageType"
+        },
+        "acknowledged_sequence_number": {
+          "minimum": 0,
+          "title": "Acknowledged Sequence Number",
+          "type": "integer"
+        },
+        "dropped": {
+          "default": false,
+          "description": "True when a non-critical message was dropped under backpressure.",
+          "title": "Dropped",
+          "type": "boolean"
+        },
+        "server_received_at_utc": {
+          "format": "date-time",
+          "title": "Server Received At Utc",
+          "type": "string"
+        },
+        "stored": {
+          "description": "True when the message reached the session store.",
+          "title": "Stored",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "acknowledged_message_id",
+        "acknowledged_message_type",
+        "acknowledged_sequence_number",
+        "server_received_at_utc",
+        "stored"
+      ],
+      "title": "AcknowledgementPayload",
+      "type": "object"
+    },
+    "AdaptationAcknowledgementPayload": {
+      "additionalProperties": false,
+      "description": "A task client's response to an adaptation command.",
+      "properties": {
+        "accepted": {
+          "title": "Accepted",
+          "type": "boolean"
+        },
+        "applied_at_utc": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Applied At Utc"
+        },
+        "command_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Command Id",
+          "type": "string"
+        },
+        "duplicate": {
+          "default": false,
+          "description": "True when this command_id had already been applied and the repeat was absorbed idempotently.",
+          "title": "Duplicate",
+          "type": "boolean"
+        },
+        "rejection_reason": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rejection Reason"
+        }
+      },
+      "required": [
+        "command_id",
+        "accepted"
+      ],
+      "title": "AdaptationAcknowledgementPayload",
+      "type": "object"
+    },
+    "AdaptationCommandName": {
+      "description": "The visually harmless commands implemented in Milestone 4.\n\nMilestone 4 implements **transport only**.  No policy, cooldown,\nhysteresis, or personalization logic derives these commands; every\ncommand in this milestone is issued manually or by a test script.",
+      "enum": [
+        "set_difficulty",
+        "set_stimulus_interval",
+        "pause_task",
+        "resume_task"
+      ],
+      "title": "AdaptationCommandName",
+      "type": "string"
+    },
+    "AdaptationCommandPayload": {
+      "additionalProperties": false,
+      "description": "A command routed from the backend to a task client.\n\nMilestone 4 transports commands; it does not decide them.  ``reason``\nis a free-text audit note supplied by whoever issued the command, not\na model-derived justification, and no field here asserts that the\ncommand improves engagement or any other outcome.",
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/AdaptationCommandName"
+        },
+        "command_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Command Id",
+          "type": "string"
+        },
+        "expires_at_utc": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At Utc"
+        },
+        "is_manual": {
+          "default": true,
+          "description": "Milestone 4 issues manual or scripted commands only. No automatic policy exists in this milestone.",
+          "title": "Is Manual",
+          "type": "boolean"
+        },
+        "issued_at_utc": {
+          "format": "date-time",
+          "title": "Issued At Utc",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "target_client_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When set, only this client receives the command.",
+          "title": "Target Client Id"
+        },
+        "target_role": {
+          "$ref": "#/$defs/ClientRole",
+          "default": "simulator"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "command_id",
+        "command",
+        "reason",
+        "issued_at_utc"
+      ],
+      "title": "AdaptationCommandPayload",
+      "type": "object"
+    },
+    "ClientHelloPayload": {
+      "additionalProperties": false,
+      "description": "First message a client sends after the socket opens.",
+      "properties": {
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "client_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Client Name",
+          "type": "string"
+        },
+        "client_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Client Version",
+          "type": "string"
+        },
+        "protocol_version": {
+          "description": "Repeated inside the payload so a rejected handshake can still report what the client believed it spoke.",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ClientRole"
+        }
+      },
+      "required": [
+        "role",
+        "client_name",
+        "client_version",
+        "protocol_version"
+      ],
+      "title": "ClientHelloPayload",
+      "type": "object"
+    },
+    "ClientRole": {
+      "description": "The role a connected client claims during the handshake.\n\n- ``simulator`` / ``unity``: task clients.  They emit task events and\n  are eligible targets for adaptation commands.\n- ``observer``: read-only.  Receives broadcast telemetry, may not\n  emit task events.\n- ``replay``: injects a previously recorded session.",
+      "enum": [
+        "simulator",
+        "unity",
+        "observer",
+        "replay"
+      ],
+      "title": "ClientRole",
+      "type": "string"
+    },
+    "DataSource": {
+      "description": "Origin of data in a session.",
+      "enum": [
+        "synthetic",
+        "public_dataset",
+        "live"
+      ],
+      "title": "DataSource",
+      "type": "string"
+    },
+    "EventType": {
+      "description": "Standard event types for task and system telemetry.\n\nMembers added in Milestone 4 extend the Milestone 1 vocabulary; no\nexisting member was renamed or removed.",
+      "enum": [
+        "session_started",
+        "session_ended",
+        "trial_started",
+        "trial_ended",
+        "stimulus_presented",
+        "response_received",
+        "difficulty_changed",
+        "break_triggered",
+        "adaptation_applied",
+        "task_loaded",
+        "task_started",
+        "block_started",
+        "response_registered",
+        "response_timeout",
+        "trial_completed",
+        "block_completed",
+        "task_paused",
+        "task_resumed",
+        "task_completed",
+        "task_aborted"
+      ],
+      "title": "EventType",
+      "type": "string"
+    },
+    "HeartbeatAcknowledgementPayload": {
+      "additionalProperties": false,
+      "description": "Response to a heartbeat, carrying both server timestamps.\n\nThe two server timestamps bracket the server's handling of the\nprobe.  They are UTC wall-clock values from a *different* machine's\nclock in the general case, so they support an offset **estimate**\nwith an explicit RTT bound, never an assertion of synchronization.",
+      "properties": {
+        "client_monotonic_seconds": {
+          "description": "Echoed verbatim from the heartbeat. Never rewritten.",
+          "title": "Client Monotonic Seconds",
+          "type": "number"
+        },
+        "heartbeat_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Heartbeat Id",
+          "type": "string"
+        },
+        "server_received_at_utc": {
+          "format": "date-time",
+          "title": "Server Received At Utc",
+          "type": "string"
+        },
+        "server_sent_at_utc": {
+          "format": "date-time",
+          "title": "Server Sent At Utc",
+          "type": "string"
+        }
+      },
+      "required": [
+        "heartbeat_id",
+        "client_monotonic_seconds",
+        "server_received_at_utc",
+        "server_sent_at_utc"
+      ],
+      "title": "HeartbeatAcknowledgementPayload",
+      "type": "object"
+    },
+    "HeartbeatPayload": {
+      "additionalProperties": false,
+      "description": "Liveness probe.\n\n``client_monotonic_seconds`` is the sender's own monotonic clock.  It\nis echoed back unchanged so the sender can compute a round-trip time\nagainst a clock it actually owns.",
+      "properties": {
+        "client_monotonic_seconds": {
+          "title": "Client Monotonic Seconds",
+          "type": "number"
+        },
+        "heartbeat_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Heartbeat Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "heartbeat_id",
+        "client_monotonic_seconds"
+      ],
+      "title": "HeartbeatPayload",
+      "type": "object"
+    },
+    "MessageEnvelope": {
+      "additionalProperties": false,
+      "description": "A single protocol message.\n\n``payload`` is held as a plain JSON object here.  It is validated\nagainst the model registered for ``message_type`` by\n:func:`engagevr.protocol.validation.decode_message`, which is the\nonly supported way to construct a trusted, typed message.  Keeping\nthe envelope payload-agnostic lets the envelope be parsed (and its\n``message_type`` reported in an error) even when the payload itself\nis malformed.",
+      "properties": {
+        "correlation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "message_id of the message this one responds to.",
+          "title": "Correlation Id"
+        },
+        "message_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Message Id",
+          "type": "string"
+        },
+        "message_type": {
+          "$ref": "#/$defs/MessageType"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "protocol_version": {
+          "default": "1.0",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/MessageProvenance"
+        },
+        "replay": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReplayMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Present only on replayed messages. Never on live ones."
+        },
+        "sent_at_monotonic_seconds": {
+          "description": "Sender's own monotonic clock. Arbitrary origin; comparable only against other readings from the same sender.",
+          "title": "Sent At Monotonic Seconds",
+          "type": "number"
+        },
+        "sent_at_utc": {
+          "description": "Sender's wall-clock reading, timezone-aware.",
+          "format": "date-time",
+          "title": "Sent At Utc",
+          "type": "string"
+        },
+        "sequence_number": {
+          "description": "Per-source counter within a session. Must not decrease and must not repeat.",
+          "minimum": 0,
+          "title": "Sequence Number",
+          "type": "integer"
+        },
+        "session_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/MessageSource"
+        }
+      },
+      "required": [
+        "message_type",
+        "session_id",
+        "source",
+        "sequence_number",
+        "sent_at_utc",
+        "sent_at_monotonic_seconds"
+      ],
+      "title": "MessageEnvelope",
+      "type": "object"
+    },
+    "MessageProvenance": {
+      "additionalProperties": false,
+      "description": "Where a message's content came from.\n\n``synthetic_label`` is set to ``\"SYNTHETIC\"`` for every simulated\nmessage and is never cleared downstream.  A consumer that wants to\nexclude simulated data can do so on this field alone.",
+      "properties": {
+        "data_source": {
+          "$ref": "#/$defs/DataSource",
+          "default": "synthetic"
+        },
+        "producer": {
+          "default": "",
+          "description": "Module or program that produced the content.",
+          "maxLength": 256,
+          "title": "Producer",
+          "type": "string"
+        },
+        "synthetic_label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "SYNTHETIC",
+          "description": "Permanently 'SYNTHETIC' for generated content; else null.",
+          "title": "Synthetic Label"
+        }
+      },
+      "title": "MessageProvenance",
+      "type": "object"
+    },
+    "MessageSource": {
+      "description": "Which program produced a message.\n\n``source`` describes the **originator**.  A replayed message keeps\nits original source and gains separate replay metadata; it is never\nrelabelled as though the replay player had produced it.",
+      "enum": [
+        "python_simulator",
+        "unity_client",
+        "backend",
+        "replay",
+        "test_fixture"
+      ],
+      "title": "MessageSource",
+      "type": "string"
+    },
+    "MessageType": {
+      "description": "Every message category the protocol defines.\n\nA message whose ``message_type`` is not a member of this enum is\nrejected with :attr:`ProtocolErrorCode.UNKNOWN_MESSAGE_TYPE`.",
+      "enum": [
+        "client_hello",
+        "server_hello",
+        "session_start",
+        "session_end",
+        "task_event",
+        "task_state",
+        "telemetry",
+        "adaptation_command",
+        "adaptation_acknowledgement",
+        "heartbeat",
+        "heartbeat_acknowledgement",
+        "replay_control",
+        "acknowledgement",
+        "protocol_error"
+      ],
+      "title": "MessageType",
+      "type": "string"
+    },
+    "ProtocolErrorCode": {
+      "description": "Machine-readable reasons a message was rejected.\n\nRejection reasons are preserved verbatim in the session recording so\nthat a rejected message can be diagnosed after the fact.",
+      "enum": [
+        "invalid_json",
+        "message_too_large",
+        "unsupported_protocol_version",
+        "unknown_message_type",
+        "invalid_envelope",
+        "invalid_payload",
+        "duplicate_message_id",
+        "duplicate_sequence_number",
+        "sequence_reversal",
+        "session_mismatch",
+        "handshake_required",
+        "handshake_rejected",
+        "role_not_permitted",
+        "expired_command",
+        "queue_full",
+        "internal_error"
+      ],
+      "title": "ProtocolErrorCode",
+      "type": "string"
+    },
+    "ProtocolErrorPayload": {
+      "additionalProperties": false,
+      "description": "Typed rejection notice.\n\n``detail`` preserves the original rejection reason verbatim so it\nsurvives into the session recording.",
+      "properties": {
+        "detail": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "error_code": {
+          "$ref": "#/$defs/ProtocolErrorCode"
+        },
+        "fatal": {
+          "default": false,
+          "description": "True when the connection is being closed.",
+          "title": "Fatal",
+          "type": "boolean"
+        },
+        "offending_message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Offending Message Id"
+        },
+        "offending_message_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Kept as a raw string: the value may not be a known type.",
+          "title": "Offending Message Type"
+        },
+        "offending_sequence_number": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Offending Sequence Number"
+        }
+      },
+      "required": [
+        "error_code",
+        "detail"
+      ],
+      "title": "ProtocolErrorPayload",
+      "type": "object"
+    },
+    "ReplayAction": {
+      "description": "Control actions understood by a replay-capable receiver.",
+      "enum": [
+        "start",
+        "pause",
+        "resume",
+        "step",
+        "stop"
+      ],
+      "title": "ReplayAction",
+      "type": "string"
+    },
+    "ReplayControlPayload": {
+      "additionalProperties": false,
+      "description": "Control message for a replay-capable receiver.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ReplayAction"
+        },
+        "source_session_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Source Session Id",
+          "type": "string"
+        },
+        "speed": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "0 means immediate (no sleeping). None leaves it unchanged.",
+          "title": "Speed"
+        }
+      },
+      "required": [
+        "action",
+        "source_session_id"
+      ],
+      "title": "ReplayControlPayload",
+      "type": "object"
+    },
+    "ReplayMetadata": {
+      "additionalProperties": false,
+      "description": "Metadata added when a recorded message is replayed.\n\nThis is **additive**.  The replayed envelope keeps its original\n``source``, ``sequence_number``, timestamps, and provenance; the\npresence of this block is what marks it as a replay.  A replayed\nmessage is therefore never presentable as a live message, and a\nreplayed synthetic message carries both ``SYNTHETIC`` (in\nprovenance) and ``REPLAY`` (here).",
+      "properties": {
+        "original_arrival_index": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Arrival order in the original recording, when known.",
+          "title": "Original Arrival Index"
+        },
+        "replay_index": {
+          "description": "Position in the replay stream.",
+          "minimum": 0,
+          "title": "Replay Index",
+          "type": "integer"
+        },
+        "replay_label": {
+          "default": "REPLAY",
+          "description": "Permanently 'REPLAY'.",
+          "title": "Replay Label",
+          "type": "string"
+        },
+        "replay_session_id": {
+          "description": "Session identifier this replay is publishing under.",
+          "title": "Replay Session Id",
+          "type": "string"
+        },
+        "replay_speed": {
+          "description": "Speed multiplier; 0 means immediate.",
+          "minimum": 0.0,
+          "title": "Replay Speed",
+          "type": "number"
+        },
+        "replayed_at_utc": {
+          "format": "date-time",
+          "title": "Replayed At Utc",
+          "type": "string"
+        },
+        "source_session_id": {
+          "description": "Session the message was originally recorded under.",
+          "title": "Source Session Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_session_id",
+        "replay_session_id",
+        "replay_index",
+        "replay_speed",
+        "replayed_at_utc"
+      ],
+      "title": "ReplayMetadata",
+      "type": "object"
+    },
+    "ResponseOutcome": {
+      "description": "How a trial's response slot resolved.\n\n``TIMEOUT`` is deliberately distinct from ``INCORRECT``: no response\nwas produced at all, which is a different observation from a wrong\nresponse and must never be silently folded into an error rate.",
+      "enum": [
+        "correct",
+        "incorrect",
+        "timeout"
+      ],
+      "title": "ResponseOutcome",
+      "type": "string"
+    },
+    "ServerHelloPayload": {
+      "additionalProperties": false,
+      "description": "Backend response to a ``client_hello``.",
+      "properties": {
+        "accepted": {
+          "title": "Accepted",
+          "type": "boolean"
+        },
+        "assigned_client_id": {
+          "title": "Assigned Client Id",
+          "type": "string"
+        },
+        "connection_timeout_seconds": {
+          "exclusiveMinimum": 0.0,
+          "title": "Connection Timeout Seconds",
+          "type": "number"
+        },
+        "heartbeat_interval_seconds": {
+          "exclusiveMinimum": 0.0,
+          "title": "Heartbeat Interval Seconds",
+          "type": "number"
+        },
+        "maximum_message_bytes": {
+          "exclusiveMinimum": 0,
+          "title": "Maximum Message Bytes",
+          "type": "integer"
+        },
+        "protocol_version": {
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "rejection_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rejection Reason"
+        },
+        "server_name": {
+          "title": "Server Name",
+          "type": "string"
+        },
+        "server_time_utc": {
+          "format": "date-time",
+          "title": "Server Time Utc",
+          "type": "string"
+        },
+        "server_version": {
+          "title": "Server Version",
+          "type": "string"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "accepted",
+        "server_name",
+        "server_version",
+        "protocol_version",
+        "session_id",
+        "assigned_client_id",
+        "server_time_utc",
+        "heartbeat_interval_seconds",
+        "connection_timeout_seconds",
+        "maximum_message_bytes"
+      ],
+      "title": "ServerHelloPayload",
+      "type": "object"
+    },
+    "SessionEndPayload": {
+      "additionalProperties": false,
+      "description": "Declares the end of a task session.",
+      "properties": {
+        "completed": {
+          "description": "True only when the task ran to its planned end.",
+          "title": "Completed",
+          "type": "boolean"
+        },
+        "ended_at_utc": {
+          "format": "date-time",
+          "title": "Ended At Utc",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ended_at_utc",
+        "completed",
+        "reason"
+      ],
+      "title": "SessionEndPayload",
+      "type": "object"
+    },
+    "SessionStartPayload": {
+      "additionalProperties": false,
+      "description": "Declares the start of a task session.\n\n``participant_id`` is a pseudonymous label.  No name, email, or\nother identifying information is representable here.",
+      "properties": {
+        "blocks": {
+          "minimum": 0,
+          "title": "Blocks",
+          "type": "integer"
+        },
+        "configuration": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": "Flat snapshot of the task settings actually in force.",
+          "title": "Configuration",
+          "type": "object"
+        },
+        "difficulty_level": {
+          "minimum": 0,
+          "title": "Difficulty Level",
+          "type": "integer"
+        },
+        "participant_id": {
+          "description": "Pseudonymous identifier only. Never a real-world identity.",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Participant Id",
+          "type": "string"
+        },
+        "started_at_utc": {
+          "format": "date-time",
+          "title": "Started At Utc",
+          "type": "string"
+        },
+        "task_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "trials_per_block": {
+          "minimum": 0,
+          "title": "Trials Per Block",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "participant_id",
+        "task_id",
+        "started_at_utc",
+        "blocks",
+        "trials_per_block",
+        "difficulty_level"
+      ],
+      "title": "SessionStartPayload",
+      "type": "object"
+    },
+    "TaskEventDetail": {
+      "additionalProperties": false,
+      "description": "The wire payload of one task event.\n\nEvery field except ``event_type`` is optional because the vocabulary\nspans task-level, block-level, trial-level, and response-level\nevents; a ``block_started`` event has no ``reaction_time_ms`` and\nmust not invent one.\n\nMissing-data rules\n------------------\n- A missing response leaves ``observed_response``,\n  ``reaction_time_ms``, and ``response_correct`` as ``None``.  They\n  are never set to ``\"\"``, ``0``, or ``False`` to stand in for\n  \"no response\".\n- ``response_outcome`` is ``timeout`` for a missed response, which\n  is distinct from ``incorrect``.\n- ``reaction_time_ms`` may not be negative.\n\nIdentifier fields (``task_id``, ``block_id``, ``trial_id``) are\nretained on every trial-scoped event so that events can later be\njoined into synchronized feature windows without re-deriving\nstructure from ordering alone.",
+      "properties": {
+        "block_id": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Zero-based block index within the task.",
+          "title": "Block Id"
+        },
+        "difficulty_level": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Task difficulty setting in force.",
+          "title": "Difficulty Level"
+        },
+        "event_type": {
+          "$ref": "#/$defs/EventType",
+          "description": "Task-event name; must be a member of TASK_EVENT_TYPES."
+        },
+        "expected_response": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Response key the task defined as matching.",
+          "title": "Expected Response"
+        },
+        "observed_response": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Response key actually registered. None = no response.",
+          "title": "Observed Response"
+        },
+        "reaction_time_ms": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Milliseconds from stimulus onset to registered response. None when no response was registered. Never negative.",
+          "title": "Reaction Time Ms"
+        },
+        "response_correct": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether the observed response matched the expected response. None when no response was registered.",
+          "title": "Response Correct"
+        },
+        "response_outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResponseOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Resolution of the response slot; timeout is not incorrect."
+        },
+        "stimulus_category": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Neutral category label of the stimulus.",
+          "title": "Stimulus Category"
+        },
+        "stimulus_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Identifier of the presented stimulus.",
+          "title": "Stimulus Id"
+        },
+        "task_elapsed_ms": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Milliseconds since task start, measured by the client.",
+          "title": "Task Elapsed Ms"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Identifier of the task definition in use.",
+          "title": "Task Id"
+        },
+        "trial_elapsed_ms": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Milliseconds since the current trial started.",
+          "title": "Trial Elapsed Ms"
+        },
+        "trial_id": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Zero-based trial index within the block.",
+          "title": "Trial Id"
+        }
+      },
+      "required": [
+        "event_type"
+      ],
+      "title": "TaskEventDetail",
+      "type": "object"
+    },
+    "TaskEventPayload": {
+      "additionalProperties": false,
+      "description": "One task event.\n\nThe event body is :class:`~engagevr.schemas.events.TaskEventDetail`,\nreused directly rather than restated, so the wire format and the\nstored schema cannot diverge.",
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/TaskEventDetail"
+        }
+      },
+      "required": [
+        "event"
+      ],
+      "title": "TaskEventPayload",
+      "type": "object"
+    },
+    "TaskState": {
+      "description": "Coarse lifecycle state of a task client.",
+      "enum": [
+        "idle",
+        "loaded",
+        "running",
+        "paused",
+        "completed",
+        "aborted"
+      ],
+      "title": "TaskState",
+      "type": "string"
+    },
+    "TaskStatePayload": {
+      "additionalProperties": false,
+      "description": "Current coarse state of a task client.",
+      "properties": {
+        "block_id": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Block Id"
+        },
+        "difficulty_level": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Difficulty Level"
+        },
+        "state": {
+          "$ref": "#/$defs/TaskState"
+        },
+        "stimulus_interval_ms": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stimulus Interval Ms"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "trial_id": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trial Id"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "title": "TaskStatePayload",
+      "type": "object"
+    },
+    "TelemetryPayload": {
+      "additionalProperties": false,
+      "description": "Software/runtime telemetry from a client.\n\nThis carries frame rates, queue depths, dropped-message counts, and\nsimilar **program** measurements.  It deliberately cannot carry\nbehavioural, physiological, engagement, or cognitive-load values:\nthose have their own schemas and their own storage path, and mixing\nthem into a task telemetry channel would blur the boundary this\nmilestone is required to keep.",
+      "properties": {
+        "component": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Component",
+          "type": "string"
+        },
+        "metrics": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maxProperties": 64,
+          "title": "Metrics",
+          "type": "object"
+        }
+      },
+      "required": [
+        "component"
+      ],
+      "title": "TelemetryPayload",
+      "type": "object"
+    }
+  },
+  "$id": "https://engagevr.local/schemas/engagevr-protocol-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allOf": [
+    {
+      "$ref": "#/$defs/MessageEnvelope"
+    }
+  ],
+  "description": "One EngageVR real-time protocol message. Protocol version 1.0; accepted major versions: [1]. Payloads carry task and transport telemetry only: no engagement value, no cognitive-load value, no behavioural or physiological measurement, and no raw frame data is representable.",
+  "oneOf": [
+    {
+      "properties": {
+        "message_type": {
+          "const": "acknowledgement"
+        },
+        "payload": {
+          "$ref": "#/$defs/AcknowledgementPayload"
+        }
+      },
+      "required": [
+        "message_type",
+        "payload"
+      ],
+      "title": "acknowledgement"
+    },
+    {
+      "properties": {
+        "message_type": {
+          "const": "adaptation_acknowledgement"
+        },
+        "payload": {
+          "$ref": "#/$defs/AdaptationAcknowledgementPayload"
+        }
+      },
+      "required": [
+        "message_type",
+        "payload"
+      ],
+      "title": "adaptation_acknowledgement"
+    },
+    {
+      "properties": {
+        "message_type": {
+          "const": "adaptation_command"
+        },
+        "payload": {
+          "$ref": "#/$defs/AdaptationCommandPayload"
+        }
+      },
+      "required": [
+        "message_type",
+        "payload"
+      ],
+      "title": "adaptation_command"
+    },
+    {
+      "properties": {
+        "message_type": {
+          "const": "client_hello"
+        },
+        "payload": {
+          "$ref": "#/$defs/ClientHelloPayload"
+        }
+      },
+      "required": [
+        "message_type",
+        "payload"
+      ],
+      "title": "client_hello"
+    },
+    {
+      "properties": {
+        "message_type": {
+          "const": "heartbeat"
+        },
+        "payload": {
+          "$ref": "#/$defs/HeartbeatPayload"
+        }
+      },
+      "required": [
+        "message_type",
+        "payload"
+      ],
+      "title": "heartbeat"
+    },
+    {
+      "properties": {
+        "message_type": {
+          "const": "heartbeat_acknowledgement"
+        },
+        "payload": {
+          "$ref": "#/$defs/HeartbeatAcknowledgementPayload"
+        }
+      },
+      "required": [
+        "message_type",
+        "payload"
+      ],
+      "title": "heartbeat_acknowledgement"
+    },
+    {
+      "properties": {
+        "message_type": {
+          "const": "protocol_error"
+        },
+        "payload": {
+          "$ref": "#/$defs/ProtocolErrorPayload"
+        }
+      },
+      "required": [
+        "message_type",
+        "payload"
+      ],
+      "title": "protocol_error"
+    },
+    {
+      "properties": {
+        "message_type": {
+          "const": "replay_control"
+        },
+        "payload": {
+          "$ref": "#/$defs/ReplayControlPayload"
+        }
+      },
+      "required": [
+        "message_type",
+        "payload"
+      ],
+      "title": "replay_control"
+    },
+    {
+      "properties": {
+        "message_type": {
+          "const": "server_hello"
+        },
+        "payload": {
+          "$ref": "#/$defs/ServerHelloPayload"
+        }
+      },
+      "required": [
+        "message_type",
+        "payload"
+      ],
+      "title": "server_hello"
+    },
+    {
+      "properties": {
+        "message_type": {
+          "const": "session_end"
+        },
+        "payload": {
+          "$ref": "#/$defs/SessionEndPayload"
+        }
+      },
+      "required": [
+        "message_type",
+        "payload"
+      ],
+      "title": "session_end"
+    },
+    {
+      "properties": {
+        "message_type": {
+          "const": "session_start"
+        },
+        "payload": {
+          "$ref": "#/$defs/SessionStartPayload"
+        }
+      },
+      "required": [
+        "message_type",
+        "payload"
+      ],
+      "title": "session_start"
+    },
+    {
+      "properties": {
+        "message_type": {
+          "const": "task_event"
+        },
+        "payload": {
+          "$ref": "#/$defs/TaskEventPayload"
+        }
+      },
+      "required": [
+        "message_type",
+        "payload"
+      ],
+      "title": "task_event"
+    },
+    {
+      "properties": {
+        "message_type": {
+          "const": "task_state"
+        },
+        "payload": {
+          "$ref": "#/$defs/TaskStatePayload"
+        }
+      },
+      "required": [
+        "message_type",
+        "payload"
+      ],
+      "title": "task_state"
+    },
+    {
+      "properties": {
+        "message_type": {
+          "const": "telemetry"
+        },
+        "payload": {
+          "$ref": "#/$defs/TelemetryPayload"
+        }
+      },
+      "required": [
+        "message_type",
+        "payload"
+      ],
+      "title": "telemetry"
+    }
+  ],
+  "title": "EngageVR protocol message",
+  "x-accepted-major-versions": [
+    1
+  ],
+  "x-message-types": [
+    "acknowledgement",
+    "adaptation_acknowledgement",
+    "adaptation_command",
+    "client_hello",
+    "heartbeat",
+    "heartbeat_acknowledgement",
+    "protocol_error",
+    "replay_control",
+    "server_hello",
+    "session_end",
+    "session_start",
+    "task_event",
+    "task_state",
+    "telemetry"
+  ],
+  "x-protocol-version": "1.0"
+}

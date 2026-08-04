@@ -1,0 +1,27 @@
+{
+  "correlation_id": null,
+  "message_id": "fixture-client-hello",
+  "message_type": "client_hello",
+  "payload": {
+    "capabilities": [
+      "task_event",
+      "adaptation_acknowledgement"
+    ],
+    "client_name": "engagevr-unity-client",
+    "client_version": "0.1.0",
+    "protocol_version": "1.0",
+    "role": "unity"
+  },
+  "protocol_version": "1.0",
+  "provenance": {
+    "data_source": "synthetic",
+    "producer": "engagevr.protocol.fixtures",
+    "synthetic_label": "SYNTHETIC"
+  },
+  "replay": null,
+  "sent_at_monotonic_seconds": 1000.0,
+  "sent_at_utc": "2026-01-01T12:00:00Z",
+  "sequence_number": 0,
+  "session_id": "fixture-session",
+  "source": "unity_client"
+}

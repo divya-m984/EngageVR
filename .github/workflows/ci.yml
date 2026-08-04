@@ -32,3 +32,8 @@ jobs:
 
       - name: Test
         run: uv run pytest --tb=short -v
+
+      - name: Protocol artefacts are up to date
+        run: |
+          uv run python scripts/generate_protocol_artifacts.py
+          git diff --exit-code -- protocol/

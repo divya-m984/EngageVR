@@ -218,3 +218,86 @@ engagement or high cognitive load.**
    experimenter.
 
 3. **No data leaves the local machine** in the default configuration.
+
+## Task Environment, Protocol, and Replay Limitations (Milestone 4)
+
+### Scientific status of task telemetry
+
+1. **The task is a software telemetry source, not an instrument.** Accuracy,
+   reaction time, and timeout counts describe what the task program
+   observed. They are **not** engagement, attention, cognitive-load, or
+   fatigue measurements.
+
+2. **The task has not been experimentally designed.** No pilot has been run,
+   no psychometric properties are known, no norms exist, and no
+   institutional approval has been obtained. Until it is designed and
+   approved by qualified supervision, nothing derived from it may be
+   described as measuring a psychological construct.
+
+3. **Every simulated response is fabricated.** The Python simulator draws
+   responses, reaction times, and timeouts from a seeded random number
+   generator. No person performs the simulated task. The lognormal shape used
+   for reaction times was chosen only because it is positive and
+   right-skewed; **it is not a model of human reaction times** and no
+   parameter was fitted to any data.
+
+4. **A replay is not new data.** Replaying a recording produces no new
+   observation. Replayed output is permanently labelled `REPLAY`, and
+   replayed synthetic output carries `SYNTHETIC` as well.
+
+### Validation status
+
+5. **Unity has not been compiled or executed.** No Unity Editor or Unity Hub
+   is installed in the development environment, and Unity was not downloaded
+   automatically. The C# client exists as source and is written against the
+   checked-in protocol fixtures, but it has never been compiled, its EditMode
+   and PlayMode tests have never run, and no player has been built. The
+   Milestone 4 criterion "the Python simulator and Unity use the same
+   versioned protocol" is therefore only **half verified**.
+
+6. **No end-to-end test with a human operator.** The desktop task's keyboard
+   input path has not been exercised by a person, only by unit-level logic
+   tests that supply key presses directly.
+
+### Engineering limitations
+
+7. **Single process only.** The connection registry lives in one process's
+   memory. Under multiple uvicorn workers, a command routed by one worker
+   would never reach a client connected to another, and an observer would see
+   only its own worker's traffic. Multi-worker and distributed operation are
+   **not supported**.
+
+8. **No production authentication.** The local backend has no
+   authentication, no authorization, no transport encryption, and no rate
+   limiting. It binds to loopback by default; binding elsewhere requires an
+   explicit flag. Anyone who can reach the port can read and inject session
+   data.
+
+9. **Clocks are not synchronized.** Nothing in this system synchronizes the
+   clocks of independent machines. Clock offset is reported only as an
+   *estimate* from heartbeat round trips, with `rtt/2` uncertainty valid only
+   under an unverified symmetric-delay assumption. Cross-process transport
+   delay is reported as unavailable rather than as a number that would
+   actually be measuring clock offset.
+
+10. **Duplicate detection has a finite horizon.** The ordering tracker
+    retains the most recent 4096 message ids per source to keep memory
+    bounded. A duplicate arriving after more than 4096 intervening messages
+    from the same source will not be detected.
+
+11. **Durability is "flushed", not "power-cut safe".** Events are flushed to
+    the operating system on the configured cadence but are not fsynced per
+    record. The guarantee is that every line the OS accepted is readable, not
+    that every line survives a power failure. `summary.json` is written
+    atomically and is fsynced.
+
+12. **Backpressure can lose non-critical telemetry.** When a bounded queue is
+    full, non-critical messages are dropped rather than blocking the process.
+    Drops are counted, logged, and written to `dropped.jsonl`, so they are
+    never silent — but the data is gone. Critical messages are never dropped;
+    the connection is failed instead.
+
+13. **No adaptation policy exists.** Milestone 4 implements command
+    *transport* only. Every command is issued manually or by a test script.
+    No claim is made anywhere that applying a command improves engagement or
+    any other outcome.

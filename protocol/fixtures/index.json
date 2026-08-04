@@ -1,0 +1,76 @@
+{
+  "invalid": [
+    {
+      "expected_error_code": "unsupported_protocol_version",
+      "file": "unsupported-major-version.json"
+    },
+    {
+      "expected_error_code": "unsupported_protocol_version",
+      "file": "malformed-version.json"
+    },
+    {
+      "expected_error_code": "unknown_message_type",
+      "file": "unknown-message-type.json"
+    },
+    {
+      "expected_error_code": "invalid_envelope",
+      "file": "missing-message-type.json"
+    },
+    {
+      "expected_error_code": "invalid_envelope",
+      "file": "negative-sequence-number.json"
+    },
+    {
+      "expected_error_code": "invalid_envelope",
+      "file": "naive-timestamp.json"
+    },
+    {
+      "expected_error_code": "invalid_envelope",
+      "file": "unknown-envelope-field.json"
+    },
+    {
+      "expected_error_code": "invalid_payload",
+      "file": "negative-reaction-time.json"
+    },
+    {
+      "expected_error_code": "invalid_payload",
+      "file": "timeout-with-reaction-time.json"
+    },
+    {
+      "expected_error_code": "invalid_payload",
+      "file": "non-task-event-in-task-event.json"
+    },
+    {
+      "expected_error_code": "invalid_payload",
+      "file": "unknown-payload-field.json"
+    },
+    {
+      "expected_error_code": "invalid_envelope",
+      "file": "synthetic-without-label.json"
+    }
+  ],
+  "note": "These fixtures are the shared contract between the Python implementation and the Unity C# client. Both test suites parse these exact files. Regenerate with 'uv run python scripts/generate_protocol_artifacts.py'.",
+  "protocol_version": "1.0",
+  "schema": "protocol/engagevr-protocol-v1.schema.json",
+  "valid": [
+    "client-hello.json",
+    "server-hello.json",
+    "session-start.json",
+    "task-event-stimulus-presented.json",
+    "task-event-response-registered.json",
+    "task-event-response-timeout.json",
+    "task-state.json",
+    "telemetry.json",
+    "adaptation-command-set-difficulty.json",
+    "adaptation-command-pause.json",
+    "adaptation-acknowledgement-accepted.json",
+    "adaptation-acknowledgement-rejected.json",
+    "heartbeat.json",
+    "heartbeat-acknowledgement.json",
+    "replay-control.json",
+    "acknowledgement.json",
+    "protocol-error.json",
+    "session-end.json",
+    "replayed-synthetic-task-event.json"
+  ]
+}

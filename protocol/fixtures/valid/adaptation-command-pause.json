@@ -1,0 +1,28 @@
+{
+  "correlation_id": null,
+  "message_id": "fixture-adaptation-command-pause",
+  "message_type": "adaptation_command",
+  "payload": {
+    "command": "pause_task",
+    "command_id": "cmd-0002",
+    "expires_at_utc": null,
+    "is_manual": true,
+    "issued_at_utc": "2026-01-01T12:00:00Z",
+    "reason": "manual operator request",
+    "target_client_id": null,
+    "target_role": "unity",
+    "value": null
+  },
+  "protocol_version": "1.0",
+  "provenance": {
+    "data_source": "live",
+    "producer": "engagevr.protocol.fixtures",
+    "synthetic_label": null
+  },
+  "replay": null,
+  "sent_at_monotonic_seconds": 1002.0,
+  "sent_at_utc": "2026-01-01T12:00:00Z",
+  "sequence_number": 2,
+  "session_id": "fixture-session",
+  "source": "backend"
+}
