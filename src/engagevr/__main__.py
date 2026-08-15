@@ -10,13 +10,18 @@ Usage::
     uv run python -m engagevr task-sim --seed 42 --blocks 2 --trials-per-block 10
     uv run python -m engagevr session-inspect artifacts/sessions/SESSION_ID
     uv run python -m engagevr session-replay artifacts/sessions/SESSION_ID --speed 0
+    uv run python -m engagevr features-demo --seed 42 --subjects 30
+    uv run python -m engagevr baseline-demo --target engagement_class --folds 5
+    uv run python -m engagevr baseline-train --mode scientific --target engagement_class
 
-All outputs from the ``demo``, ``rppg-demo``, and ``task-sim`` commands are
-deterministic SYNTHETIC data.  Capture outputs are behavioural proxies, NOT
-engagement, psychological, clinical, or diagnostic conclusions.  rPPG heart
-rates are signal-processing estimates, NOT medical measurements.  Task
-telemetry is a software measurement, NOT an engagement, attention,
-cognitive-load, or fatigue measurement.
+All outputs from the ``demo``, ``rppg-demo``, ``task-sim``, ``features-demo``,
+and ``baseline-demo`` commands are deterministic SYNTHETIC data.  Capture
+outputs are behavioural proxies, NOT engagement, psychological, clinical, or
+diagnostic conclusions.  rPPG heart rates are signal-processing estimates, NOT
+medical measurements.  Task telemetry is a software measurement, NOT an
+engagement, attention, cognitive-load, or fatigue measurement.  Baseline
+metrics computed from synthetic data are software self-checks, NOT model
+accuracy and NOT experimental evidence.
 """
 
 from __future__ import annotations
@@ -135,8 +140,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     from engagevr.cli_milestone4 import add_parsers
+    from engagevr.cli_milestone5 import add_parsers as add_milestone5_parsers
 
     add_parsers(sub)
+    add_milestone5_parsers(sub)
     return parser
 
 
@@ -668,6 +675,16 @@ def main(argv: list[str] | None = None) -> int:
         return _run_rppg_demo(args)
     if args.command == "rppg-evaluate":
         return _run_rppg_evaluate(args)
+
+    if args.command in ("features-demo", "baseline-demo", "baseline-train"):
+        from engagevr import cli_milestone5
+
+        milestone5 = {
+            "features-demo": cli_milestone5.run_features_demo,
+            "baseline-demo": cli_milestone5.run_baseline_demo,
+            "baseline-train": cli_milestone5.run_baseline_train,
+        }
+        return milestone5[args.command](args)
 
     if args.command in ("serve", "task-sim", "session-inspect", "session-replay"):
         from engagevr import cli_milestone4

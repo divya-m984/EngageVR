@@ -295,3 +295,122 @@ a **software telemetry source** used to exercise the protocol, the backend,
 the storage layer, and the replay path. Selecting and justifying an actual
 cognitive paradigm from primary literature is future work that must precede
 any psychological interpretation of its output.
+
+## Milestone 5 — Evaluation methodology
+
+### Grouped cross-validation
+
+Grouped k-fold and stratified grouped k-fold are used because several
+windows share a session and several sessions can share a participant.
+
+> scikit-learn developers. "Cross-validation iterators for grouped data."
+> *scikit-learn User Guide*, §3.1.2.3.
+> https://scikit-learn.org/stable/modules/cross_validation.html
+
+**Implementation note.** `StratifiedGroupKFold` is used only when every
+class appears in at least `n_splits` distinct groups; feasibility is
+checked in `engagevr.training.splits._stratification_feasible` rather than
+left to the splitter's behaviour, and the fallback to `GroupKFold` records
+its reason. Ungrouped splitters are deliberately not imported (DEC-041).
+
+### Probability calibration
+
+Platt (sigmoid) scaling:
+
+> J. Platt (1999). "Probabilistic outputs for support vector machines and
+> comparisons to regularized likelihood methods." *Advances in Large
+> Margin Classifiers*, MIT Press, pp. 61-74.
+
+Isotonic calibration:
+
+> B. Zadrozny, C. Elkan (2002). "Transforming classifier scores into
+> accurate multiclass probability estimates." *Proceedings of the 8th ACM
+> SIGKDD International Conference on Knowledge Discovery and Data Mining*.
+> DOI 10.1145/775047.775151
+
+**Implementation note.** `CalibratedClassifierCV(cv="prefit")` was
+deprecated in scikit-learn 1.6 and removed in 1.8; this project wraps the
+fitted estimator in `sklearn.frozen.FrozenEstimator`, which is the
+supported API on the installed 1.9.0 (DEC-042). The minimum-data
+thresholds for isotonic calibration (50 rows, 10 per class) are this
+project's engineering choice, not a published threshold, and are
+documented as such.
+
+### Expected calibration error
+
+> C. Guo, G. Pleiss, Y. Sun, K. Q. Weinberger (2017). "On calibration of
+> modern neural networks." *Proceedings of the 34th International
+> Conference on Machine Learning (ICML)*, PMLR 70:1321-1330.
+
+The equal-width binned estimator used here follows the definition in that
+paper:
+
+```
+ECE = Σ_m (|B_m| / n) · | accuracy(B_m) − confidence(B_m) |
+```
+
+**Deviations, stated.** Bins are equal-width over the maximum predicted
+class probability, `M = 10` by default and recorded on every document.
+Empty bins contribute nothing and are retained with `count = 0` so the
+binning is reconstructible from the stored result. ECE is a *binned
+estimator*: its value depends on the bin count, which is why the count is
+persisted next to the number.
+
+### Brier score
+
+> G. W. Brier (1950). "Verification of forecasts expressed in terms of
+> probability." *Monthly Weather Review* 78(1):1-3.
+> DOI 10.1175/1520-0493(1950)078<0001:VOFEIT>2.0.CO;2
+
+**Convention, stated.** The multiclass form used here is
+`mean_i ‖ p_i − onehot(y_i) ‖²`, i.e. the mean squared Euclidean distance
+between the predicted probability vector and the one-hot true vector,
+range `[0, 2]`. The alternative convention (half this value) is not used.
+The definition is carried in the schema field that stores the number, so a
+persisted result is interpretable without this document.
+
+### Permutation importance
+
+> L. Breiman (2001). "Random forests." *Machine Learning* 45(1):5-32.
+> DOI 10.1023/A:1010933404324
+
+> A. Fisher, C. Rudin, F. Dominici (2019). "All models are wrong, but many
+> are useful: learning a variable's importance by studying an entire class
+> of prediction models simultaneously." *Journal of Machine Learning
+> Research* 20(177):1-81.
+
+**Implementation note.** Importance is computed on **held-out fold data**,
+never on training data, and impurity-based importance is not used: it is
+biased toward high-cardinality features and is computed on the training
+set. Permutation is applied to the estimator's post-preprocessing input
+matrix; the fitted transformer is deterministic, so this is equivalent to
+permuting through the pipeline and avoids re-running the
+`ColumnTransformer` for every (feature × repeat) permutation.
+
+Fisher, Rudin and Dominici document the correlated-feature caveat this
+project repeats: with near-duplicate inputs, permuting one alone
+understates both.
+
+### Histogram-based gradient boosting
+
+> T. Chen, C. Guestrin (2016). "XGBoost: a scalable tree boosting system."
+> *Proceedings of the 22nd ACM SIGKDD International Conference on
+> Knowledge Discovery and Data Mining*. DOI 10.1145/2939672.2939785
+
+> G. Ke et al. (2017). "LightGBM: a highly efficient gradient boosting
+> decision tree." *Advances in Neural Information Processing Systems 30*.
+
+scikit-learn's `HistGradientBoosting*` estimators implement the
+histogram-based algorithm these papers describe. Neither XGBoost nor
+LightGBM is a dependency of this project (DEC-037); the references are
+given because they are the primary description of the algorithm actually
+being used.
+
+### Deferred, with the reason
+
+**SHAP** (Lundberg & Lee, 2017) is not used in this milestone. Shapley
+attributions are expensive, are frequently over-read as causal, and would
+add a dependency to explain models that have not been evaluated against
+any real label. Coefficients and permutation importance answer the
+question this milestone actually has: which inputs did a model lean on in
+held-out folds.

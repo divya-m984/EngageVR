@@ -797,3 +797,367 @@ dependency of Starlette.
 uvicorn 0.52.1, websockets 17.0.1, httpx2 2.9.1, pytest-asyncio 1.4.0. No
 Redis, PostgreSQL, MongoDB, Kafka, RabbitMQ, Celery, MLflow, DVC, Streamlit,
 React, Node.js, or Docker was added. One OpenCV wheel variant remains.
+
+---
+
+### DEC-037: Four Modelling Dependencies, No Second Gradient-Boosting Library
+
+**Date:** 2026-08-04
+**Status:** Accepted
+
+**Context:** Milestone 5 needs tabular datasets, classical estimators, and
+model persistence. The architecture document already anticipated pandas,
+PyArrow, scikit-learn, and XGBoost.
+
+**Decision:** Add exactly four runtime dependencies —
+`scikit-learn>=1.6,<2`, `pandas>=2.2,<4`, `pyarrow>=17,<26`, and
+`joblib>=1.4,<2`. **XGBoost is not added.**
+
+`HistGradientBoostingClassifier` and `HistGradientBoostingRegressor`
+implement the same histogram-based boosted-tree algorithm, handle missing
+values natively, and arrive with scikit-learn. A second gradient-boosting
+library would add a dependency, a build requirement, and a second
+serialisation format without adding a capability.
+
+`joblib` is declared explicitly rather than relied upon as a scikit-learn
+transitive dependency, because EngageVR imports it directly for model
+persistence.
+
+**Consequence:** Resolved and verified on Python 3.12.13 — scikit-learn
+1.9.0, pandas 3.0.5, pyarrow 25.0.0, joblib 1.5.3. NumPy 2.5.1 and SciPy
+1.18.0 were unchanged by the resolution. `uv tree` shows no duplicate or
+conflicting package and one OpenCV wheel variant. No PyTorch, TensorFlow,
+LightGBM, CatBoost, Optuna, SHAP, MLflow, DVC, Streamlit, Docker, or
+database was added.
+
+None of the four ships a `py.typed` marker, so each is listed in the
+existing `ignore_missing_imports` mypy override alongside mediapipe and
+cv2. A second, narrower override sets `disallow_subclassing_any = false`
+for `engagevr.training.models` only: the two rule baselines must subclass
+scikit-learn's untyped `BaseEstimator` to be usable inside a `Pipeline`.
+
+---
+
+### DEC-038: A Feature Catalog Gates What May Become a Predictor
+
+**Date:** 2026-08-04
+**Status:** Accepted
+
+**Context:** A modelling dataset accumulates columns. Without a gate,
+whatever happens to be in the table becomes a model input, including
+identifiers, provenance, and re-encodings of the answer.
+
+**Decision:** Every feature is declared in a versioned, **ordered** feature
+catalog carrying its canonical name, description, source modality, unit,
+aggregation formula, minimum evidence, missing-value behaviour, quality
+dependency, and a `permitted_predictor` flag. A feature with no entry
+cannot enter a dataset; a column with no entry cannot reach a model.
+
+Catalog order fixes dataset column order, which is part of the dataset
+fingerprint, so reordering the catalog is a detectable change.
+
+**Consequence:** `rppg_method` is catalogued for provenance but is **not**
+a permitted predictor: the extraction method is a property of the pipeline
+configuration, and a model using it would learn a processing artefact.
+Categorical features are barred from being predictors in this milestone,
+enforced by a schema validator.
+
+The catalog is snapshotted beside every dataset as
+`<stem>.feature_catalog.json`, so a stored dataset can be audited against
+the contract it was built under rather than against whatever the code says
+today.
+
+---
+
+### DEC-039: Unavailable Is Null; Missing Is Never Zero, and Quality Is Never a Value
+
+**Date:** 2026-08-04
+**Status:** Accepted
+
+**Context:** DEC-020 established this for rPPG. The feature layer faces the
+same choice at a different granularity, and a modelling table makes it
+tempting to zero-fill so that estimators "just work".
+
+**Decision:** Feature values, per-feature availability, modality
+availability, modality quality, targets, and target provenance occupy
+**separate columns with separate prefixes** and are never merged. A missing
+measurement is null in the dataset. Non-finite values are rejected rather
+than stored.
+
+Three missing-value semantics are declared per feature:
+`null_when_unavailable`, `null_when_evidence_insufficient`, and
+`zero_when_no_events`. The last is reserved for counts where zero is a
+genuine observation — a window in which a tracked face produced no blinks
+really did contain no blinks — and is not applied to a window with no face
+at all.
+
+**Consequence:** Imputation becomes a modelling decision made inside a
+training fold, never a dataset property. Where median imputation is used,
+a missingness indicator accompanies it, the `avail__` and
+`modality_quality__` columns stay in the matrix, and histogram gradient
+boosting receives values unimputed. A quality failure is therefore marked
+in three places and is never silently converted into a physiological
+value.
+
+---
+
+### DEC-040: The Dataset Fingerprint Excludes Every Wall Clock
+
+**Date:** 2026-08-04
+**Status:** Accepted
+
+**Context:** Milestone 5's acceptance criterion is that metrics are exactly
+reproducible from the same data, configuration, and seed. That is only
+checkable if "the same data" is decidable.
+
+**Decision:** `dataset_fingerprint` is a SHA-256 over a canonical rendering
+of the schema versions, the catalog version, the exact column order, the
+window geometry, and every row's values in that order, with rows sorted by
+`(session_id, window_index, window_id)`. Floats are rendered with `repr`,
+which round-trips exactly for IEEE-754 doubles.
+
+`created_at_utc` and every other wall-clock value are **excluded** from the
+canonical content.
+
+**Consequence:** Two equivalent deterministic builds fingerprint
+identically, which is asserted by a test that builds the same metadata with
+two different creation timestamps. The fingerprint changes on any change to
+row content, schema, column order, feature order, target set, or window
+geometry — each asserted separately — and does not change when rows are
+supplied in a different order.
+
+Run identifiers follow the same rule: `build_run_id` hashes only what
+defines a run, so re-running one configuration reproduces its identifier
+instead of accumulating near-duplicate directories.
+
+---
+
+### DEC-041: Grouped Splitting Only, With No Row-Level Fallback
+
+**Date:** 2026-08-04
+**Status:** Accepted
+
+**Context:** Several windows come from one session and several sessions can
+come from one person. `KFold`, `StratifiedKFold`, and `train_test_split`
+place the same person on both sides of the boundary.
+
+**Decision:** `engagevr.training.splits` offers grouped splitters only.
+Grouping priority is `subject_id`, then `session_id`, then **refusal**.
+There is no configuration flag that enables row-level splitting, and the
+ungrouped scikit-learn splitters are not imported.
+
+When a defensible split is impossible — fewer than two groups, or fewer
+groups than requested folds — the splitter raises with an actionable
+message rather than weakening the split.
+
+Stratification feasibility is checked explicitly: when a class appears in
+fewer distinct groups than there are folds, the run falls back to
+non-stratified grouped k-fold and **records why** in the split manifest.
+
+**Consequence:** A dataset with one participant cannot be evaluated by this
+pipeline, which is correct: it has no independent held-out group.
+`audit_split` independently re-checks every manifest for train/test
+overlap, calibration/test overlap, calibration groups outside training, and
+any session whose rows reach the test portion of more than one fold.
+
+---
+
+### DEC-042: Calibration Uses FrozenEstimator on Groups Disjoint From Fitting
+
+**Date:** 2026-08-04
+**Status:** Accepted
+
+**Context:** `CalibratedClassifierCV(cv="prefit")` was deprecated in
+scikit-learn 1.6 and removed in 1.8. The installed version is 1.9.0.
+
+**Decision:** Calibration wraps the fitted pipeline in
+`sklearn.frozen.FrozenEstimator`, which is the supported API and which
+makes `ensemble="auto"` resolve to `False`, so the whole calibration set
+fits one calibrator.
+
+Within each outer fold, the base estimator is fitted on the *fit groups*,
+the calibrator on *calibration groups* carved out of the training groups
+and disjoint from them, and the outer test groups are used only to score.
+`assert_calibration_disjoint` re-checks all three sets before anything is
+fitted.
+
+Isotonic calibration requires at least 50 calibration rows and at least 10
+per class; below that it is skipped with a stated reason rather than
+silently downgraded. Isotonic regression is non-parametric and will fit a
+step function through a handful of points.
+
+**Consequence:** scikit-learn still constructs a default CV splitter on the
+way into `CalibratedClassifierCV` and warns about thin classes even though
+a frozen estimator never splits. That one message is suppressed at the call
+site with a comment stating why; every genuine thin-class condition is
+caught by the explicit checks above it. A test asserts
+`len(calibrated_classifiers_) == 1`, which is what proves no internal
+cross-validation occurred.
+
+Abstention, coverage-versus-performance, and online confidence policy are
+**not** implemented here. They are Milestone 7.
+
+---
+
+### DEC-043: An Undefined Metric Is Unavailable, Never Zero
+
+**Date:** 2026-08-04
+**Status:** Accepted
+
+**Context:** scikit-learn's `zero_division=0` turns an undefined precision
+into `0.0`. Zero is a legitimate score, so a reader cannot distinguish "the
+model scored zero" from "this was not computable".
+
+**Decision:** Undefined metrics are `None` with a reason recorded in
+`unavailable_metrics`. Per-class quantities use `zero_division=np.nan` and
+are reported as null; macro means are taken over the classes for which the
+quantity is *defined*, and the excluded classes are recorded. R² is null
+when the true values have zero variance or there are fewer than two
+samples. Log loss, Brier, and ECE are null without probabilities.
+
+A non-finite *prediction*, by contrast, raises: a model that cannot produce
+a finite prediction must fail rather than emit one.
+
+Fold aggregation is the unweighted mean and population standard deviation
+over the folds in which the metric was defined, with the valid-fold count
+reported alongside. Folds are weighted equally so one large participant
+cannot dominate the summary.
+
+**Consequence:** Confusion matrices are stored as labelled data — the
+vocabulary, an explicit statement that rows are true and columns predicted,
+and the counts — never as a bare array. The multiclass Brier convention and
+the exact ECE binning formula are stated in the schema fields that carry
+the numbers, so a stored result is interpretable without the source.
+
+---
+
+### DEC-044: Evaluation Mode Is a Required Field, and Synthetic Can Never Be Scientific
+
+**Date:** 2026-08-04
+**Status:** Accepted
+
+**Context:** DEC-007 requires synthetic data to be permanently labelled.
+Milestone 5 introduces the first artefacts that carry *scores*, which are
+exactly the artefacts most likely to be quoted out of context.
+
+**Decision:** Every metrics document carries a required `evaluation_mode`
+and a required non-empty `disclaimers` list. A `software_self_check`
+document cannot set `scientific_evaluation_eligible: true` and must carry
+the banner `SOFTWARE SELF-CHECK — NOT SCIENTIFIC EVALUATION`; both are
+schema-enforced.
+
+Synthetic target observations must carry `synthetic_label: "SYNTHETIC"` and
+must set `scientific_evaluation_permitted: false`, also schema-enforced.
+`baseline-train --mode scientific` refuses any dataset with a synthetic
+row, a prohibited target, or an unstated target source type.
+
+**Consequence:** There is no field anywhere in the experiment schemas that
+could hold a published or public-dataset score, so a synthetic number
+cannot be recorded as one. Tests scan generated artefacts for
+validity-claim phrases and fail if any appears.
+
+---
+
+### DEC-045: Measurements Are Never Automatically Promoted to Labels
+
+**Date:** 2026-08-04
+**Status:** Accepted
+
+**Context:** With task accuracy, reaction time, difficulty level, and a
+heart-rate estimate available, the shortest path to a "labelled" dataset is
+to declare one of them the target. That step is a research claim, not a
+data transformation.
+
+**Decision:** `reject_automatic_derivation` refuses to derive any target
+from any measurement group, with a stated reason per group. There is no
+`allow` flag: producing a real label requires an external instrument and a
+documented protocol.
+
+Every target observation must state a `source_type` from a closed
+vocabulary, a non-empty `source_instrument`, non-empty `provenance_notes`,
+and the interval it describes. Only `synthetic_generator` is currently
+populated; the other four categories are declared so real labels can be
+ingested later, and so a reader can see which categories remain empty.
+
+**Consequence:** Task telemetry and rPPG estimates remain *predictors or
+outcome measurements* throughout, consistent with DEC-033 and DEC-020.
+Difficulty level is a predictor and an experimental manipulation, never
+cognitive load.
+
+---
+
+### DEC-046: Rule Baselines Are Software Checks and Are Labelled as Such
+
+**Date:** 2026-08-04
+**Status:** Accepted
+
+**Context:** A learned model's score means little without something trivial
+to compare it against. A rule baseline supplies that — and is also the
+easiest artefact to misread as a validated indicator.
+
+**Decision:** Two deterministic rule estimators are registered, one per
+task type. Each thresholds or rescales **one** feature whose identity is an
+arbitrary implementation choice recorded per target. Both are flagged
+`is_software_check_baseline`, both carry
+`RULE_BASELINE_DISCLAIMER` in their notes, and their probabilities are
+documented as *not calibrated*.
+
+When the preferred feature is absent — inside an ablation that removed it —
+the estimator falls back to the first available measured column and records
+which one it used. The substitution is never silent.
+
+**Consequence:** No model is selected as a champion and none is labelled
+production-ready. A synthetic self-check cannot rank models for any purpose
+that matters, and tests assert that no registry entry, artefact, or CLI
+line claims otherwise.
+
+---
+
+### DEC-047: MLflow Deferred; Local JSON and Parquet Run Records Instead
+
+**Date:** 2026-08-04
+**Status:** Accepted
+
+**Context:** MLflow is a Milestone 10 deliverable. Milestone 5 needs
+experiment records now.
+
+**Decision:** Each run writes a self-describing directory of JSON and
+Parquet under `artifacts/experiments/`, with `checksums.json` written
+second-to-last and `manifest.json` written **last**, both atomically.
+
+A directory with no manifest is an interrupted run. A manifest with
+`status: failed` is a run that concluded in failure. A manifest claiming
+completion is refused if a required artefact is missing.
+
+**Consequence:** A run is auditable with no service running and without
+loading any model file: provenance, metrics, splits, calibration design,
+and disclaimers are all JSON. Model files are pickles and are labelled as
+executable content in `models/README.txt`; the warning states they must
+never be loaded from an untrusted source.
+
+No Git command is run to obtain run metadata — version information comes
+from installed package metadata.
+
+---
+
+### DEC-048: Two Modules Beyond the Milestone 5 Filename List
+
+**Date:** 2026-08-04
+**Status:** Accepted
+
+**Context:** The milestone brief listed the modules to create under
+`features/` and `training/`. Two pieces of behaviour had no listed home.
+
+**Decision:** Dataset loading and predictor-matrix construction live in
+`training/preprocessing.py` rather than in a new module: selecting columns,
+auditing them for leakage, and preparing them for a transformer is one
+concern, and splitting it would put the leakage audit at a distance from
+the code that builds the matrix.
+
+`cli_milestone5.py` follows the Milestone 4 precedent (DEC-013): the
+modelling commands live in their own module so `__main__` stays a thin
+dispatcher and so they can be tested without importing the webcam, rPPG, or
+WebSocket code paths.
+
+**Consequence:** `docs/ARCHITECTURE.md` is updated to match the implemented
+module layout. No module listed in the brief was omitted.

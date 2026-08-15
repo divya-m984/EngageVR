@@ -8,28 +8,39 @@
 
 ## Status
 
-**Milestone 4 -- Task Environment, Simulator, Real-Time Bridge, and
-Replay.** Backend, Python simulator, shared protocol, session storage, and
-replay implementation complete; **Unity compilation and runtime validation
-pending** (no Unity Editor is installed in this environment).
+**Milestone 5 baseline-model pipeline implementation complete; scientific
+evaluation on real participant-labelled data pending.**
 
 Implemented: webcam capture, face landmarks (MediaPipe), behavioural proxy
 features, capture quality, a classical rPPG pipeline (GREEN / CHROM / POS,
-spectral heart rate, interpretable quality index, UBFC-rPPG adapter), and —
-new in Milestone 4 — a shared versioned protocol (`1.0`), a deterministic
-task simulator, a local FastAPI + WebSocket bridge with bounded-queue
-backpressure, append-only JSONL session storage with crash recovery,
-deterministic session replay, and a Unity desktop task at source level.
+spectral heart rate, interpretable quality index, UBFC-rPPG adapter), a
+shared versioned protocol (`1.0`), a deterministic task simulator, a local
+FastAPI + WebSocket bridge with bounded-queue backpressure, append-only
+JSONL session storage with crash recovery, deterministic session replay, a
+Unity desktop task at source level, and — new in Milestone 5 — a windowed
+feature dataset with a versioned feature catalog and SHA-256 fingerprint,
+interpretable baseline models under grouped cross-validation, offline
+probability calibration, feature-group ablations, and local experiment
+records.
 
-Not implemented: ML models, engagement models, cognitive-load models,
-multimodal fusion, uncertainty calibration, personalization, adaptation
-*policy* (Milestone 4 implements command **transport** only), HRV, Streamlit,
-MLflow, DVC, Docker, deep learning.
+Not implemented: multimodal fusion, uncertainty-aware abstention,
+personalization, online inference, adaptation *policy* (Milestone 4
+implements command **transport** only), HRV, Streamlit, MLflow, DVC,
+Docker, deep learning.
+
+Pending validation: **Unity compilation and runtime** (no Unity Editor is
+installed here), **physical-webcam capture**, **UBFC-rPPG evaluation**, and
+**any evaluation on real participant labels** — none exist.
 
 > **rPPG heart-rate values are signal-processing estimates from camera
 > data.** They are not medical measurements, have not been validated
 > against any reference device, and are not engagement or cognitive-load
 > values.
+
+> **Every model metric in this repository was computed from SYNTHETIC
+> data.** Those numbers are software self-checks. They are not model
+> accuracy, not engagement validity, not cognitive-load validity, and must
+> never be compared with a published result on real data.
 
 ## Quick Start
 
@@ -263,6 +274,94 @@ no Unity Editor is installed in this environment. See
 [docs/UNITY_SETUP.md](docs/UNITY_SETUP.md).
 
 
+## Feature Datasets and Baseline Models (Milestone 5)
+
+### Build a deterministic SYNTHETIC feature dataset
+
+```bash
+uv run python -m engagevr features-demo \
+  --seed 42 \
+  --subjects 30 \
+  --sessions-per-subject 2 \
+  --windows-per-session 20 \
+  --output artifacts/datasets/m5-synthetic.parquet
+```
+
+Writes three files: the Parquet table, a `*.metadata.json` provenance
+document carrying the SHA-256 dataset fingerprint, and a
+`*.feature_catalog.json` snapshot of the catalog it was built against.
+Running it twice with the same seed produces the **same fingerprint** —
+wall-clock values are excluded from the canonical content on purpose.
+
+Every row and every target is permanently labelled `SYNTHETIC` and sets
+`scientific_evaluation_permitted: false`.
+
+### Run baseline software verification
+
+```bash
+uv run python -m engagevr baseline-demo \
+  --dataset artifacts/datasets/m5-synthetic.parquet \
+  --target engagement_class \
+  --folds 5 --seed 42 \
+  --output artifacts/experiments/m5-engagement-demo
+```
+
+Prints `SOFTWARE SELF-CHECK — NOT SCIENTIFIC EVALUATION` before and after
+the results, along with the dataset fingerprint, data-source counts, the
+target and task type, the grouping field and group count, the split
+strategy and why it was chosen, the fold count, every model evaluated, and
+the artifact locations.
+
+Targets: `engagement_class`, `engagement_score`, `cognitive_load_class`,
+`cognitive_load_score`.
+
+### Generic training command
+
+```bash
+uv run python -m engagevr baseline-train \
+  --dataset /path/to/windowed-features.parquet \
+  --target engagement_class \
+  --mode scientific \
+  --output artifacts/experiments/run-name
+```
+
+`--mode scientific` **refuses** any dataset with a synthetic row, a target
+that forbids scientific evaluation, or an unstated target source type, and
+exits non-zero. It is expected to refuse every dataset this repository can
+currently produce.
+
+### What the modelling layer is
+
+- **Windowed feature dataset** — fixed-duration, half-open windows; 61
+  catalogued features across five modality groups; separate columns for
+  values, availability, modality availability, modality quality, targets,
+  and target provenance; missing measurements stay null.
+- **Grouped cross-validation** — subject grouping, falling back to session
+  grouping, and **refusing** when neither yields two independent groups.
+  There is no row-level fallback.
+- **Baselines** — dummy, logistic regression / ridge, random forest,
+  scikit-learn histogram gradient boosting, and a clearly labelled
+  deterministic rule-based software-check baseline.
+- **Calibration** — sigmoid and isotonic, fitted on groups disjoint from
+  those used to fit the base estimator and never on the outer test fold.
+- **Ablations** — nine feature subsets on identical folds. These are
+  feature-subset comparisons, **not** multimodal fusion.
+- **Experiment records** — a directory of JSON and Parquet per run, with a
+  checksum file and an atomically written manifest. No MLflow yet.
+
+See [Feature Dataset](docs/FEATURE_DATASET.md),
+[Baseline Models](docs/BASELINE_MODELS.md),
+[Model Evaluation](docs/MODEL_EVALUATION.md), and
+[Experiment Tracking](docs/EXPERIMENT_TRACKING.md).
+
+### What it is not
+
+No model here has been fitted to a real participant label, because none
+exists. No number produced by these commands is model accuracy, engagement
+validity, cognitive-load validity, generalisation evidence, or a
+psychological, clinical, or experimental conclusion. No model is a
+champion and none is production-ready.
+
 ## Privacy
 
 - Raw video is never stored by default.
@@ -301,6 +400,11 @@ src/engagevr/         Python package
   storage/            Append-only JSONL session recordings (M4)
   replay/             Deterministic session replay (M4)
   cli_milestone4.py   serve / task-sim / session-inspect / session-replay
+  features/           Windowed feature datasets: catalog, windowing,
+                      aggregation, assembly, validation, synthetic (M5)
+  training/           Splits, preprocessing, models, calibration, metrics,
+                      ablation, runner, artifacts (M5)
+  cli_milestone5.py   features-demo / baseline-demo / baseline-train
 configs/              YAML configuration files
 protocol/             Checked-in JSON Schema and contract fixtures (M4)
 scripts/              Model download, protocol-artefact generation
@@ -324,6 +428,10 @@ docs/                 Project documentation
 - [Session Format](docs/SESSION_FORMAT.md)
 - [Replay](docs/REPLAY.md)
 - [Unity Setup and Status](docs/UNITY_SETUP.md)
+- [Feature Dataset](docs/FEATURE_DATASET.md)
+- [Baseline Models](docs/BASELINE_MODELS.md)
+- [Model Evaluation](docs/MODEL_EVALUATION.md)
+- [Experiment Tracking](docs/EXPERIMENT_TRACKING.md)
 
 ## Disclaimer
 
@@ -334,6 +442,10 @@ monitoring purpose.** Its engagement and cognitive-load outputs are model
 estimates and are not psychological or clinical conclusions. Its task
 telemetry is a software measurement, not a measurement of attention,
 cognition, workload, or fatigue.
+
+No validated participant engagement or cognitive-load label exists in this
+project. Every model metric here was computed from SYNTHETIC data and is a
+software self-check, not evidence about any person.
 
 ## License
 
