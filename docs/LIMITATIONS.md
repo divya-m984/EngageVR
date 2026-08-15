@@ -301,3 +301,128 @@ engagement or high cognitive load.**
     *transport* only. Every command is issued manually or by a test script.
     No claim is made anywhere that applying a command improves engagement or
     any other outcome.
+
+## Feature Dataset and Baseline Modelling Limitations (Milestone 5)
+
+### Scientific status
+
+**Milestone 5 baseline-model pipeline implementation complete; scientific
+evaluation on real participant-labelled data pending.**
+
+Every number this pipeline has produced came from deterministic SYNTHETIC
+data that this repository generated from a data-generating process it
+chose. Those numbers measure whether the code is wired together correctly.
+They are:
+
+- **not** model accuracy;
+- **not** evidence that engagement can be estimated;
+- **not** evidence that cognitive load can be estimated;
+- **not** evidence about generalisation to a new person;
+- **not** comparable with any published result on real data;
+- **not** psychological, clinical, diagnostic, or experimental evidence.
+
+Which feature group helps a model recover a latent variable that this
+software itself inserted is a fact about the generator, not about people.
+
+### No validated labels exist
+
+There is no approved participant engagement label and no approved
+cognitive-load label in this project. No questionnaire has been selected,
+no instrument has been validated, no annotation protocol has been written,
+and no ethics approval has been sought or obtained.
+
+The target schema declares five source categories
+(`subjective_self_report`, `experiment_condition`, `expert_annotation`,
+`public_dataset_annotation`, `synthetic_generator`). **Only the last is
+populated.** The others exist so real labels can be ingested later without
+redefining the schema — their emptiness is the point.
+
+### Measurements are not labels
+
+Task accuracy, error rate, timeout rate, and reaction time are software
+measurements of what the task program observed. Difficulty level is an
+experimental manipulation. Camera-based heart rate is an unvalidated
+signal-processing estimate. Behavioural proxies and head pose are
+geometry. Capture quality describes the measurement.
+
+None of these is an engagement or cognitive-load label, and
+`reject_automatic_derivation` refuses to convert any of them into one.
+
+### The feature layer has never seen real data
+
+The behavioural, head-pose, rPPG, and capture-quality aggregators have
+never been run on a live webcam session. They are exercised against typed
+fixtures and against the synthetic generator. Consequently:
+
+- the minimum-evidence thresholds are engineering defaults, not validated
+  cut-offs, and meeting one does not make a window scientifically
+  adequate;
+- the 10-second default window duration and step are defaults, not
+  findings — nothing has been optimised against anything;
+- the feature catalog's coverage reflects what the earlier milestones
+  implemented, not what a validated engagement model would need.
+
+### Evaluation-design limitations
+
+- Grouped cross-validation prevents leakage **between the groups a dataset
+  actually declares**. With one participant per session and no repeated
+  participants, session grouping is the strongest available guarantee and
+  is weaker than participant grouping.
+- Passing the scientific-mode gate establishes **eligibility, not
+  validity**. It checks data source and target provenance. It cannot check
+  whether a label means what its instrument claims.
+- Fold aggregation weights folds equally. With very unequal group sizes,
+  the aggregate is not the pooled score and should not be read as one.
+- Hyperparameter grids are deliberately tiny. Nothing here is a claim
+  about achievable performance.
+- The rule-based estimators are **software checks**. They threshold one
+  arbitrarily chosen feature, their probabilities are not calibrated, and
+  they are not validated indicators of anything.
+- No model is selected as a champion and none is production-ready.
+
+### Calibration limitations
+
+- Calibration is fitted on groups disjoint from those used to fit the base
+  estimator and never on the outer test fold. It is still a *sample*
+  estimate, and a small calibration set produces an unstable one — which
+  is why isotonic calibration is refused below 50 rows or 10 rows per
+  class rather than silently produced.
+- When a fold's calibration set is empty or missing a class, calibration
+  is skipped and the reason is recorded. Aggregate calibration metrics
+  therefore have a smaller valid-fold count than the accuracy metrics
+  beside them, and the count is reported alongside every aggregate.
+- A calibrated probability is **not certainty** and is **not signal
+  quality**. Model probability and signal quality are separate fields
+  throughout.
+- Abstention, coverage-versus-performance analysis, and any online
+  confidence policy are **not implemented**. They belong to Milestone 7.
+
+### Interpretation limitations
+
+- Association is not causation. A feature a model leans on is not a
+  measurement of the construct being modelled.
+- Correlated features share credit arbitrarily. The dataset contains
+  genuine collinearity — three response proportions summing to one, order
+  statistics ordered by construction — so a linear model may split a
+  coefficient between near-duplicates and a permutation test may score
+  both as unimportant because either substitutes for the other.
+- Interpretation data is recorded even when a model does not beat chance,
+  with a warning attached. Reading importances from such a model describes
+  noise.
+- SHAP is not used in this milestone.
+
+### Not implemented in this milestone
+
+Multimodal-fusion architectures, modality masks, quality-aware weighting,
+early-versus-late fusion comparison, temporal neural networks,
+personalisation, online inference, confidence-based abstention, adaptation
+policy, dashboard pages, MLflow, DVC, Docker, and deployment. `all_available`
+in the ablation set means "no feature group was removed"; it is not a
+fusion architecture.
+
+### No medical, psychological, or adaptive-effectiveness claim
+
+Nothing in the modelling layer supports a medical, diagnostic, screening,
+monitoring, psychological, or clinical conclusion, and nothing here shows
+that adapting an environment on the basis of these estimates would help
+anyone.

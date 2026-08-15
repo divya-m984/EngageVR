@@ -17,6 +17,10 @@ dependencies = [
     "fastapi>=0.141,<1",
     "uvicorn>=0.35,<1",
     "websockets>=15,<18",
+    "scikit-learn>=1.6,<2",
+    "pandas>=2.2,<3.0.4",
+    "pyarrow>=17,<26",
+    "joblib>=1.4,<2",
 ]
 
 [build-system]
@@ -63,8 +67,31 @@ warn_unused_configs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["mediapipe.*", "cv2"]
+# None of these distributions ships a `py.typed` marker, so mypy cannot see
+# their signatures. Verified for the pinned versions: mediapipe 1.0.0,
+# opencv 5.0.0, scikit-learn 1.9.0, pandas 3.0.5, pyarrow 25.0.0,
+# joblib 1.5.3. Every value crossing one of these boundaries is explicitly
+# annotated or narrowed on the EngageVR side, so `warn_return_any` still
+# has something to check.
+module = [
+    "mediapipe.*",
+    "cv2",
+    "sklearn.*",
+    "pandas",
+    "pyarrow",
+    "pyarrow.*",
+    "joblib",
+]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# The two rule-based software-check baselines must subclass scikit-learn's
+# BaseEstimator and the task mixins to be usable inside a Pipeline, and
+# those base classes are untyped (see the override above), so mypy sees a
+# subclass of `Any`. The relaxation is confined to this one module; every
+# public function in it is still fully annotated.
+module = ["engagevr.training.models"]
+disallow_subclassing_any = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

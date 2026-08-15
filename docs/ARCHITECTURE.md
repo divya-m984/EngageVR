@@ -142,16 +142,29 @@ value.
 
 ### 3. Feature Layer (`src/engagevr/features/`)
 
-Aggregates frame-level and window-level features with quality metadata.
+Aggregates frame-level and event-level observations into windowed rows with
+explicit availability and quality metadata. Implemented in Milestone 5.
 
-| Module | Responsibility |
-|--------|---------------|
-| `features/behavioural.py` | Facial and head-motion feature aggregation |
-| `features/physiological.py` | HR, HRV, rPPG quality feature aggregation |
-| `features/task.py` | Task-performance feature aggregation |
-| `features/subjective.py` | Subjective response features |
-| `features/windowing.py` | Configurable window aggregation |
-| `features/missing.py` | Missing-data handling and masks |
+| Module | Responsibility | Status |
+|--------|---------------|--------|
+| `features/catalog.py` | The versioned, ordered feature catalog (DEC-038) | Implemented (M5) |
+| `features/windowing.py` | Deterministic half-open windows, containment, selection | Implemented (M5) |
+| `features/aggregation.py` | Per-modality aggregation with minimum-evidence gates | Implemented (M5) |
+| `features/assembly.py` | Parquet writing, dataset metadata, SHA-256 fingerprint | Implemented (M5) |
+| `features/validation.py` | Structural, privacy, and four-mode leakage checks | Implemented (M5) |
+| `features/synthetic.py` | Deterministic SYNTHETIC dataset generator | Implemented (M5) |
+| `features/subjective.py` | Subjective response features | **Deferred** (no instrument) |
+
+Behavioural, head-pose, rPPG, task, and capture-quality aggregation live as
+functions inside `aggregation.py` rather than as one module per modality:
+they share the window-selection primitive, the minimum-evidence
+configuration, and the availability contract, and separating them would
+duplicate all three. Missing-data handling is not a module either — it is
+the `avail__` / `modality_available__` / `modality_quality__` column
+convention plus per-feature `missing_behaviour` in the catalog (DEC-039).
+
+See `docs/FEATURE_DATASET.md` for the row schema, formulas, units, and
+fingerprint definition.
 
 ### 4. Data and Synchronization Layer (`src/engagevr/schemas/`, `storage/`, `synchronization/`)
 
@@ -173,7 +186,8 @@ Defines typed schemas, manages storage, and aligns timestamps.
 | `storage/session_store.py` | Session directories, recovery, path safety (M4) |
 | `storage/jsonl.py` | Append-only JSON Lines and atomic JSON writes (M4) |
 | `storage/manifest.py` | Manifest, ingestion metadata, summary, drop records (M4) |
-| `storage/parquet.py` | Parquet read/write for time-series data | **Deferred** |
+| `features/assembly.py` | Parquet read/write for windowed feature datasets (M5) | Implemented (M5) |
+| `storage/parquet.py` | Parquet read/write for raw time-series data | **Deferred** |
 | `storage/session_db.py` | SQLite session summary storage | **Deferred** |
 | `datasets/adapter.py` | Abstract dataset adapter interface |
 
@@ -195,14 +209,35 @@ Defines typed schemas, manages storage, and aligns timestamps.
 
 Staged modelling pipeline from deterministic demo through uncertainty-aware fusion.
 
-| Stage | Module(s) | Description |
-|-------|-----------|-------------|
-| A: Demo | `inference/demo.py` | Deterministic synthetic predictions |
-| B: Baselines | `training/baselines.py` | Logistic regression, RF, XGBoost, rules |
-| C: Fusion | `training/fusion.py` | Early/late fusion, modality masks, quality weights |
-| D: Temporal | `training/temporal.py` | LSTM/GRU/TCN (deferred until baselines evaluated) |
-| E: Personal | `personalization/calibration.py` | Per-user baseline, z-score, few-shot, cold-start |
-| F: Uncertainty | `uncertainty/calibration.py` | Calibrated probabilities, ensemble disagreement, conformal |
+| Stage | Module(s) | Description | Status |
+|-------|-----------|-------------|--------|
+| A: Demo | `inference/demo.py` | Deterministic synthetic predictions | Deferred |
+| B: Baselines | `training/` (below) | Grouped CV over interpretable classical models | Implemented (M5) |
+| C: Fusion | `training/fusion.py` | Early/late fusion, modality masks, quality weights | **Deferred** (M6) |
+| D: Temporal | `training/temporal.py` | LSTM/GRU/TCN | **Deferred** (DEC-005) |
+| E: Personal | `personalization/calibration.py` | Per-user baseline, z-score, few-shot, cold-start | **Deferred** (M6) |
+| F: Uncertainty | `uncertainty/calibration.py` | Abstention, conformal, ensemble disagreement | **Deferred** (M7) |
+
+#### Milestone 5 modules (`src/engagevr/training/`)
+
+| Module | Responsibility |
+|--------|---------------|
+| `training/splits.py` | Grouped splitters, group-field choice, split audit (DEC-041) |
+| `training/preprocessing.py` | Dataset loading, predictor selection, fold-local transformers |
+| `training/models.py` | Classification and regression registries; rule software-check baselines (DEC-046) |
+| `training/calibration.py` | `FrozenEstimator` calibration on disjoint groups (DEC-042) |
+| `training/metrics.py` | Metrics with explicit unavailability and documented formulas (DEC-043) |
+| `training/ablation.py` | Nine deterministic feature-subset definitions |
+| `training/runner.py` | Fold orchestration, interpretation, artifact assembly |
+| `training/artifacts.py` | Run directories, atomic manifests, checksums (DEC-047) |
+| `cli_milestone5.py` | `features-demo` / `baseline-demo` / `baseline-train` |
+
+The baseline registry uses scikit-learn's histogram gradient boosting
+rather than XGBoost (DEC-037). No fusion architecture, temporal model,
+personalisation, or abstention policy exists in this layer yet.
+
+See `docs/BASELINE_MODELS.md`, `docs/MODEL_EVALUATION.md`, and
+`docs/EXPERIMENT_TRACKING.md`.
 
 ### 6. Adaptation Policy Layer (`src/engagevr/adaptation/`)
 
@@ -308,8 +343,9 @@ Streamlit multi-page dashboard for monitoring and analysis.
 | Data validation | Pydantic v2 |
 | Computer vision | OpenCV, MediaPipe |
 | Numerics | NumPy, SciPy |
-| Data frames | pandas, PyArrow |
-| ML | scikit-learn, XGBoost |
+| Data frames | pandas 3.0, PyArrow 25 |
+| ML | scikit-learn 1.9 (histogram gradient boosting; **no XGBoost**, DEC-037) |
+| Model persistence | joblib |
 | Deep learning | PyTorch (deferred) |
 | Dashboard | Streamlit, Plotly |
 | Storage | JSON Lines (M4); Parquet, SQLite (deferred) |
@@ -383,3 +419,21 @@ All synthetic data is:
 - Tagged with `data_source: "synthetic"` in every record
 - Displayed with a permanent visible label in the dashboard
 - Excluded from any scientific evaluation or metric reporting
+
+### Modelling-dataset privacy behaviour (Milestone 5)
+
+- A windowed feature dataset contains pseudonymous identifiers, scalar
+  feature values, availability flags, quality scores, targets, and target
+  provenance. Nothing else is representable.
+- There is no column for a name, an email, a frame, an image, a landmark
+  array, a protocol payload blob, or a secret. `assert_no_identity_columns`
+  and `assert_no_identifier_values` assert that none appears, and a test
+  scans a real generated dataset.
+- Synthetic subjects are named `synthetic-subject-0001`, never
+  "participant 1".
+- Experiment run directories carry the same guarantee: a test scans every
+  JSON artifact for identifiers, secrets, and scientific-validity claims.
+- `artifacts/` remains gitignored. Generated Parquet datasets, prediction
+  tables, and model files are never committed.
+- Model files are Python pickles and are labelled as executable content;
+  auditing a run never requires loading one.

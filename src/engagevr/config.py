@@ -615,6 +615,105 @@ class ReplayConfig(BaseModel):
         return self
 
 
+# --- Milestone 5: feature datasets and interpretable baselines ---
+
+
+class AggregationSettings(BaseModel):
+    """Minimum evidence required before a window feature is computed.
+
+    These are software thresholds that stop a summary being computed from
+    evidence too thin to support it.  They are **not** empirically
+    validated cut-offs, and meeting them does not make a window
+    scientifically adequate.
+    """
+
+    min_face_frames: int = Field(default=5, ge=1)
+    min_face_seconds: float = Field(default=1.0, gt=0.0)
+    min_pose_frames: int = Field(default=5, ge=1)
+    min_quality_frames: int = Field(default=1, ge=1)
+    min_resolved_trials: int = Field(default=1, ge=1)
+    min_reaction_times: int = Field(default=1, ge=1)
+    min_rppg_windows: int = Field(default=1, ge=1)
+
+
+class FeaturesConfig(BaseModel):
+    """Windowed-feature dataset geometry and storage location."""
+
+    catalog_version: str = Field(default="1.0", min_length=1)
+    window_duration_seconds: float = Field(default=10.0, gt=0.0)
+    window_step_seconds: float = Field(default=10.0, gt=0.0)
+    partial_window_policy: str = Field(default="drop")
+    minimum_partial_duration_seconds: float = Field(default=0.0, ge=0.0)
+    dataset_directory: str = Field(default="artifacts/datasets", min_length=1)
+    aggregation: AggregationSettings = Field(default_factory=AggregationSettings)
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.partial_window_policy not in {"drop", "keep_if_minimum"}:
+            raise ValueError(
+                "features.partial_window_policy must be 'drop' or "
+                f"'keep_if_minimum'; got {self.partial_window_policy!r}"
+            )
+        if self.window_step_seconds > self.window_duration_seconds:
+            raise ValueError(
+                "features.window_step_seconds must not exceed "
+                "window_duration_seconds, otherwise evidence between windows "
+                "is silently discarded"
+            )
+        if self.partial_window_policy == "keep_if_minimum":
+            if self.minimum_partial_duration_seconds <= 0.0:
+                raise ValueError(
+                    "features.partial_window_policy 'keep_if_minimum' requires "
+                    "a positive minimum_partial_duration_seconds"
+                )
+            if self.minimum_partial_duration_seconds > self.window_duration_seconds:
+                raise ValueError(
+                    "features.minimum_partial_duration_seconds must not exceed "
+                    "features.window_duration_seconds"
+                )
+        return self
+
+    @property
+    def windows_overlap(self) -> bool:
+        """Whether consecutive windows share evidence."""
+        return self.window_step_seconds < self.window_duration_seconds
+
+
+class TrainingConfig(BaseModel):
+    """Cross-validation, calibration, and experiment-tracking settings.
+
+    Only grouped cross-validation is configurable.  There is no setting
+    that enables row-level splitting: with several windows per session it
+    would place the same session on both sides of a fold boundary.
+    """
+
+    experiment_directory: str = Field(default="artifacts/experiments", min_length=1)
+    random_seed: int = 42
+    folds: int = Field(default=5, ge=2)
+    calibration_method: str = Field(default="sigmoid")
+    calibration_group_fraction: float = Field(default=0.25, ge=0.0, lt=1.0)
+    calibration_bins: int = Field(default=10, ge=2)
+    permutation_repeats: int = Field(default=5, ge=1)
+    run_ablations: bool = True
+    tune_hyperparameters: bool = False
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        allowed = {"none", "sigmoid", "isotonic"}
+        if self.calibration_method not in allowed:
+            raise ValueError(
+                "training.calibration_method must be one of "
+                f"{sorted(allowed)}; got {self.calibration_method!r}"
+            )
+        if self.calibration_method != "none" and self.calibration_group_fraction <= 0.0:
+            raise ValueError(
+                "training.calibration_group_fraction must be positive when a "
+                "calibration method is requested; otherwise the calibrator "
+                "would have to be fitted on the estimator's own training rows"
+            )
+        return self
+
+
 # --- Root model ---
 
 
@@ -641,6 +740,10 @@ class EngageVRConfig(BaseModel):
     sessions: SessionsConfig = Field(default_factory=SessionsConfig)
     task: TaskConfig = Field(default_factory=TaskConfig)
     replay: ReplayConfig = Field(default_factory=ReplayConfig)
+
+    # Milestone 5
+    features: FeaturesConfig = Field(default_factory=FeaturesConfig)
+    training: TrainingConfig = Field(default_factory=TrainingConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path | None = None) -> Self:

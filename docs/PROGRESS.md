@@ -1,9 +1,9 @@
 # EngageVR -- Progress Tracker
 
-## Current Milestone: 3 -- Interpretable rPPG Signal-Processing Pipeline
+## Current Milestone: 5 -- Windowed Feature Datasets and Interpretable Baselines
 
-**Status:** Milestone 3 implementation complete; physical-webcam and
-public-dataset validation pending.
+**Status:** Milestone 5 baseline-model pipeline implementation complete;
+scientific evaluation on real participant-labelled data pending.
 
 ## Milestone History
 
@@ -316,9 +316,134 @@ Python 3.12.13. No database, broker, or container dependency (DEC-036).
 2. Run the Unity client against the live backend and confirm the handshake,
    task telemetry, and adaptation acknowledgement paths end to end.
 
-### Milestone 5: Baseline Models
+---
 
-**Status:** Not started
+### Milestone 5: Windowed Feature Datasets and Interpretable Baseline Models
+
+**Started:** 2026-08-04
+**Completed (implementation):** 2026-08-04
+**Status:** Milestone 5 baseline-model pipeline implementation complete;
+scientific evaluation on real participant-labelled data pending.
+
+**Dependencies added:** `scikit-learn>=1.6,<2` (resolved 1.9.0),
+`pandas>=2.2,<4` (3.0.5), `pyarrow>=17,<26` (25.0.0), `joblib>=1.4,<2`
+(1.5.3), all runtime. **XGBoost deliberately not added** (DEC-037): the
+maintained scikit-learn histogram gradient boosting implements the same
+algorithm, handles missing values natively, and is already installed.
+NumPy 2.5.1 and SciPy 1.18.0 were unchanged by the resolution; one OpenCV
+wheel variant remains.
+
+**Delivered:**
+
+- **Feature catalog** (`features/catalog.py`, DEC-038): 61 versioned,
+  ordered entries across five modality groups, each declaring name,
+  description, modality, unit, aggregation formula, minimum evidence,
+  missing-value behaviour, quality dependency, and whether it is permitted
+  as a predictor. `rppg_method` is catalogued for provenance and is not a
+  permitted predictor.
+- **Deterministic windowing** (`features/windowing.py`): half-open
+  `[start, end)` boundaries computed from the session start rather than
+  accumulated; overlap flag; `drop` / `keep_if_minimum` partial-window
+  policy; session-containment assertion; a single window-selection
+  primitive that makes "no future events" structural.
+- **Aggregation** (`features/aggregation.py`): behavioural, head-pose,
+  rPPG, task, and capture-quality aggregators with minimum-evidence gates;
+  rejected rPPG windows contribute nothing to any physiological summary;
+  a timeout contributes no reaction time; a bridge from the Milestone 3
+  `RppgMethodResult` contract.
+- **Dataset assembly** (`features/assembly.py`, DEC-040): Parquet writing,
+  a provenance metadata document, a catalog snapshot, and a SHA-256
+  fingerprint over canonical content that **excludes every wall clock**.
+  All three written atomically.
+- **Validation** (`features/validation.py`): duplicate-window, reversed-
+  range, non-finite, catalog-conformance, session-containment, PII, and
+  four-mode leakage checks.
+- **Synthetic generator** (`features/synthetic.py`): two latent variables
+  never emitted as columns, subject and session effects, drift, AR noise,
+  configurable class imbalance, modality dropout, quality-gated rPPG
+  windows, correlated and irrelevant features, and noisy labels so a
+  perfect score is unattainable in principle. Every row and target
+  permanently labelled SYNTHETIC.
+- **Schemas**: `schemas/features.py`, `schemas/targets.py`,
+  `schemas/experiments.py`. Synthetic targets are schema-forbidden from
+  scientific evaluation (DEC-044); measurements are schema-refused as
+  automatic labels (DEC-045).
+- **Grouped splitting** (`training/splits.py`, DEC-041): subject → session
+  → refusal; explicit stratification-feasibility check with a recorded
+  reason; no row-level fallback anywhere; an independent `audit_split`.
+- **Fold-local preprocessing** (`training/preprocessing.py`): imputation
+  and scaling inside the `Pipeline`, missingness indicators, pandas output
+  so feature names survive, undeclared-column refusal.
+- **Baselines** (`training/models.py`, DEC-046): 5 classifiers and 5
+  regressors including two clearly labelled rule-based software-check
+  estimators.
+- **Calibration** (`training/calibration.py`, DEC-042): `FrozenEstimator`
+  on groups disjoint from fitting and from the outer test fold; isotonic
+  refused below 50 rows or 10 per class, with a stated reason.
+- **Metrics** (`training/metrics.py`, DEC-043): labelled confusion
+  matrices, undefined-stays-null, documented macro / Brier / ECE / log-loss
+  conventions, equal-weight fold aggregation with valid-fold counts.
+- **Interpretation**: linear coefficients with scaling context;
+  permutation importance on held-out fold data with per-repeat spread;
+  fold-level records stored before aggregation; chance-level warnings.
+- **Ablations** (`training/ablation.py`): nine feature subsets on
+  identical folds, with an explicit denial that this is fusion.
+- **Experiment records** (`training/artifacts.py`, DEC-047): a JSON +
+  Parquet run directory, deterministic run ids, checksums, atomic
+  manifest written last, failure recorded as failure. **No MLflow.**
+- **CLI**: `features-demo`, `baseline-demo`, `baseline-train`.
+- **Configuration**: new `features` and `training` sections in
+  `configs/defaults.yaml` with validated Pydantic models.
+- **Documentation**: `docs/FEATURE_DATASET.md`,
+  `docs/BASELINE_MODELS.md`, `docs/MODEL_EVALUATION.md`,
+  `docs/EXPERIMENT_TRACKING.md`; updates to README, ARCHITECTURE,
+  LIMITATIONS, REFERENCES, DATASETS, DECISIONS.
+
+**Verification:**
+- `uv lock --check` -- resolved
+- `uv sync --locked` -- clean (72 packages)
+- `uv tree` -- no duplicate or conflicting packages; one OpenCV wheel
+- `uv run ruff format --check .` -- 158 files formatted
+- `uv run ruff check .` -- all checks passed
+- `uv run mypy src` -- no issues in 93 source files
+- `uv run pytest` -- **1195 passed, 1 skipped**
+- `uv run pytest -m hardware` -- 1 skipped (no physical webcam)
+- `uv run pre-commit run --all-files` -- all passed
+- `uv run python scripts/generate_protocol_artifacts.py` -- no drift
+- `make check` -- all passed
+
+448 tests were added across 14 new modules.
+
+**Milestone 5 acceptance criteria:**
+
+| Criterion | Status |
+|-----------|--------|
+| 1. No data leakage between participant sessions | **Met for the implementation.** Grouped splitting with no row-level fallback, an independent split audit, fold-local preprocessing, calibration on disjoint groups, structural refusal of target, identifier, and post-window columns. Not exercisable against real participant sessions, because none exist. |
+| 2. Metrics are reproducible (seeded) | **Met.** Deterministic dataset fingerprints, deterministic split manifests, explicit seeds; asserted by repeat-run tests over `metrics.json` and `splits.json`. |
+| 3. Data origin is documented | **Met.** Dataset metadata, catalog snapshot, per-row target provenance, and a run manifest recording every dependency version — all inspectable as JSON without loading a model file. |
+| 4. Synthetic data is excluded from scientific evaluation | **Met.** Schema-enforced on targets and re-checked by the scientific-mode gate. |
+| 5. No synthetic number presented as real evidence | **Met.** Required disclaimers, schema-enforced self-check banner, no schema field capable of holding a published score, CLI output asserted by tests. |
+
+**Not met / pending:**
+1. **Scientific evaluation on real participant-labelled data.** No
+   validated EngageVR participant dataset exists and no approved
+   engagement or cognitive-load label exists. Every metric produced so far
+   is a synthetic software self-check.
+2. The feature-aggregation layer has never been run on a live webcam
+   session (physical-webcam validation remains pending from Milestone 3).
+3. No public dataset can currently supply a target; UBFC-rPPG carries no
+   engagement annotation and its own validation remains pending.
+
+**Decisions recorded:** DEC-037 through DEC-048 (see `docs/DECISIONS.md`)
+
+**Remaining validation for this milestone:**
+1. Obtain, or design and gain approval for, a real engagement or
+   cognitive-load label instrument, then record labels with documented
+   provenance.
+2. Run the aggregation layer on real capture sessions.
+3. Re-run `baseline-train --mode scientific` on that data and report the
+   metrics with full provenance — the first numbers in this project that
+   would describe anything other than software.
 
 ### Milestone 6: Multimodal Fusion
 

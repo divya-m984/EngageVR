@@ -168,3 +168,38 @@ replay:
   default_speed: 1.0        # 1.0 = original timing; 0 = immediate, no sleeping
   maximum_speed: 1000.0
   preserve_original_timing: true
+
+# --- Milestone 5: windowed feature datasets and interpretable baselines ---
+# Feature values are observable summaries. They are NOT engagement or
+# cognitive-load measurements. Targets in this repository are SYNTHETIC only;
+# no validated participant label exists.
+
+features:
+  catalog_version: "1.0"
+  window_duration_seconds: 10.0
+  window_step_seconds: 10.0        # equal to duration = non-overlapping
+  partial_window_policy: "drop"    # drop | keep_if_minimum
+  minimum_partial_duration_seconds: 0.0
+  dataset_directory: "artifacts/datasets"   # gitignored
+
+  aggregation:
+    # Minimum evidence before a feature is computed at all. These are
+    # software thresholds, not empirically validated cut-offs.
+    min_face_frames: 5
+    min_face_seconds: 1.0
+    min_pose_frames: 5
+    min_quality_frames: 1
+    min_resolved_trials: 1
+    min_reaction_times: 1
+    min_rppg_windows: 1
+
+training:
+  experiment_directory: "artifacts/experiments"   # gitignored
+  random_seed: 42
+  folds: 5
+  calibration_method: "sigmoid"        # none | sigmoid | isotonic
+  calibration_group_fraction: 0.25     # carved out of TRAINING groups only
+  calibration_bins: 10
+  permutation_repeats: 5
+  run_ablations: true
+  tune_hyperparameters: false          # bounded small grid when true

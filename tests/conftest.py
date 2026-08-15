@@ -10,7 +10,14 @@ from pathlib import Path
 
 import pytest
 
+from engagevr.features.assembly import write_dataset
+from engagevr.features.synthetic import (
+    SyntheticDatasetConfig,
+    generate_synthetic_dataset,
+)
+from engagevr.schemas.features import FeatureWindow
 from engagevr.schemas.session import DataSource, ExperimentCondition, Session
+from engagevr.schemas.targets import TargetName
 
 
 @pytest.fixture
@@ -45,3 +52,55 @@ def ubfc_fixture_root(tmp_path: Path) -> Path:
             f"{waveform}\n{heart_rate}\n{timestamps}\n"
         )
     return root
+
+
+# ---------------------------------------------------------------------------
+# Milestone 5: windowed feature datasets and interpretable baselines
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def m5_synthetic_config() -> SyntheticDatasetConfig:
+    """A small, deterministic SYNTHETIC generator configuration.
+
+    Deliberately small: these tests verify pipeline behaviour, not model
+    quality, and a large dataset would only make the suite slow.
+    """
+    return SyntheticDatasetConfig(
+        seed=42,
+        subjects=12,
+        sessions_per_subject=2,
+        windows_per_session=5,
+        window_duration_seconds=10.0,
+        window_step_seconds=10.0,
+    )
+
+
+@pytest.fixture(scope="session")
+def m5_synthetic_rows(
+    m5_synthetic_config: SyntheticDatasetConfig,
+) -> tuple[FeatureWindow, ...]:
+    """Deterministic SYNTHETIC feature windows shared across tests."""
+    return generate_synthetic_dataset(m5_synthetic_config)
+
+
+@pytest.fixture(scope="session")
+def m5_dataset(
+    tmp_path_factory: pytest.TempPathFactory,
+    m5_synthetic_config: SyntheticDatasetConfig,
+    m5_synthetic_rows: tuple[FeatureWindow, ...],
+) -> Path:
+    """A written SYNTHETIC Parquet dataset with metadata and catalog."""
+    directory = tmp_path_factory.mktemp("m5-dataset")
+    path = directory / "m5-synthetic.parquet"
+    write_dataset(
+        m5_synthetic_rows,
+        path,
+        target_names=list(TargetName),
+        window_duration_seconds=m5_synthetic_config.window_duration_seconds,
+        window_step_seconds=m5_synthetic_config.window_step_seconds,
+        windows_overlap=m5_synthetic_config.windows_overlap,
+        creation_configuration=m5_synthetic_config.model_dump(mode="json"),
+        random_seed=m5_synthetic_config.seed,
+    )
+    return path
