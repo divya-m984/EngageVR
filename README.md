@@ -8,8 +8,8 @@
 
 ## Status
 
-**Milestone 5 baseline-model pipeline implementation complete; scientific
-evaluation on real participant-labelled data pending.**
+**Milestone 6 multimodal-fusion implementation complete; scientific
+evaluation on real participant-labelled multimodal data pending.**
 
 Implemented: webcam capture, face landmarks (MediaPipe), behavioural proxy
 features, capture quality, a classical rPPG pipeline (GREEN / CHROM / POS,
@@ -17,16 +17,21 @@ spectral heart rate, interpretable quality index, UBFC-rPPG adapter), a
 shared versioned protocol (`1.0`), a deterministic task simulator, a local
 FastAPI + WebSocket bridge with bounded-queue backpressure, append-only
 JSONL session storage with crash recovery, deterministic session replay, a
-Unity desktop task at source level, and — new in Milestone 5 — a windowed
-feature dataset with a versioned feature catalog and SHA-256 fingerprint,
-interpretable baseline models under grouped cross-validation, offline
-probability calibration, feature-group ablations, and local experiment
-records.
+Unity desktop task at source level, a windowed feature dataset with a
+versioned feature catalog and SHA-256 fingerprint, interpretable baseline
+models under grouped cross-validation, offline probability calibration,
+feature-group ablations, local experiment records, and — new in Milestone
+6 — multimodal fusion: early feature fusion, late decision-level fusion,
+quality-aware fusion, modality-specific experts, leakage-safe stacking,
+missing-modality robustness scenarios, expert-disagreement diagnostics,
+and personalized calibration reported separately from a population
+baseline.
 
-Not implemented: multimodal fusion, uncertainty-aware abstention,
-personalization, online inference, adaptation *policy* (Milestone 4
-implements command **transport** only), HRV, Streamlit, MLflow, DVC,
-Docker, deep learning.
+Not implemented: uncertainty-aware abstention, selective prediction,
+personalized confidence thresholds, online inference, adaptation *policy*
+(Milestone 4 implements command **transport** only), HRV, Streamlit,
+MLflow, DVC, Docker, deep learning. No deep or neural fusion exists in this
+repository, and no per-subject model is trained from scratch.
 
 Pending validation: **Unity compilation and runtime** (no Unity Editor is
 installed here), **physical-webcam capture**, **UBFC-rPPG evaluation**, and
@@ -37,10 +42,12 @@ installed here), **physical-webcam capture**, **UBFC-rPPG evaluation**, and
 > against any reference device, and are not engagement or cognitive-load
 > values.
 
-> **Every model metric in this repository was computed from SYNTHETIC
-> data.** Those numbers are software self-checks. They are not model
-> accuracy, not engagement validity, not cognitive-load validity, and must
-> never be compared with a published result on real data.
+> **Every model and fusion metric in this repository was computed from
+> SYNTHETIC data.** Those numbers are software self-checks. They are not
+> model accuracy, not engagement validity, not cognitive-load validity, and
+> must never be compared with a published result on real data. No fusion
+> strategy here is a champion, and a comparison on synthetic data cannot
+> select a best fusion architecture.
 
 ## Quick Start
 
@@ -345,7 +352,8 @@ currently produce.
 - **Calibration** — sigmoid and isotonic, fitted on groups disjoint from
   those used to fit the base estimator and never on the outer test fold.
 - **Ablations** — nine feature subsets on identical folds. These are
-  feature-subset comparisons, **not** multimodal fusion.
+  feature-subset comparisons, **not** multimodal fusion; fusion is
+  Milestone 6, below.
 - **Experiment records** — a directory of JSON and Parquet per run, with a
   checksum file and an atomically written manifest. No MLflow yet.
 
@@ -361,6 +369,131 @@ exists. No number produced by these commands is model accuracy, engagement
 validity, cognitive-load validity, generalisation evidence, or a
 psychological, clinical, or experimental conclusion. No model is a
 champion and none is production-ready.
+
+## Multimodal Fusion (Milestone 6)
+
+### Run fusion software verification
+
+```bash
+uv run python -m engagevr fusion-demo \
+  --dataset artifacts/datasets/m6-synthetic.parquet \
+  --target engagement_class \
+  --folds 5 --seed 42 \
+  --strategies early uniform-late quality-late \
+  --output artifacts/experiments/m6-engagement-fusion
+```
+
+Regression targets work the same way (`--target engagement_score`).
+`fusion-train --mode scientific` refuses synthetic data, unstated target
+provenance, and synthetic modality dropout, and exits non-zero.
+
+### What fusion is here
+
+- **Four measurement modalities** — behavioural, head pose, rPPG, task.
+  `quality` is **not** a modality: capture-quality diagnostics,
+  availability flags, and missingness indicators are support signals that
+  explain a measurement rather than being one, and naming `quality` as a
+  modality is rejected.
+- **Early feature fusion** — modality features concatenated into one
+  matrix, in catalogue order, with availability carried separately and
+  fold-local preprocessing. It is concatenation; it is not attention.
+- **Late decision-level fusion** — one estimator per modality, combined by
+  a weighted average over the experts that actually produced a prediction.
+- **Quality-aware fusion** — the same combination with weights derived from
+  modality availability and recorded signal quality, using one documented
+  equation and deterministic equal base weights.
+- **Optional** — validation-derived weights from inner groups only, and
+  leakage-safe stacking with an independent out-of-fold assertion (both off
+  by default).
+- **Missing-modality robustness** — ten deterministic scenarios plus
+  optional seeded synthetic dropout, with coverage recorded for each.
+- **Expert disagreement** — an ensemble-disagreement diagnostic. It is not
+  uncertainty, it is not signal quality, and it does not trigger
+  abstention; that is Milestone 7.
+
+A missing modality is represented through **availability**, never through a
+zero, a uniform probability vector, or the training mean. A window that
+cannot meet the minimum-modality rule is recorded as unfused with a stated
+reason.
+
+See [Multimodal Fusion](docs/MULTIMODAL_FUSION.md).
+
+### What fusion is not
+
+Fusion does not make an estimate valid. No fused output has been evaluated
+against a real participant label. Signal quality is a statement about the
+measurement, never about the person, and a low quality value is never a low
+engagement value.
+
+## Personalization (Milestone 6)
+
+### Run personalization software verification
+
+```bash
+uv run python -m engagevr personalization-demo \
+  --dataset artifacts/datasets/m6-synthetic.parquet \
+  --target engagement_class \
+  --folds 5 --seed 42 \
+  --calibration-windows 5 \
+  --output artifacts/experiments/m6-personalization-class
+```
+
+Regression targets work the same way (`--target engagement_score`).
+`--calibration-windows 0` requests cold-start mode.
+`personalization-train --mode scientific` refuses synthetic data and
+unstated target provenance, and exits non-zero.
+
+### What personalization is here
+
+The documented path is `early-fusion population prediction -> subject
+calibration/correction -> personalized prediction`. Personalization layers
+on the fused population model; it does not create a parallel model stack,
+it retunes no fusion weight, and it never overwrites the population
+prediction.
+
+- **Population-only baseline** — the control.
+- **Personal-baseline feature calibration** — `z_s(x) = (x - mu_s) /
+  sigma_s`, with `mu_s` and `sigma_s` estimated from that subject's
+  calibration windows only.
+- **Few-shot correction** — for regression, `b_s = mean(y_calibration -
+  y_population_prediction)` and `y_personalized = y_population_prediction +
+  b_s`; for classification, a smoothed and shrunk per-subject log-odds
+  shift, renormalised.
+- **Population model plus user-specific correction** — both of the above,
+  and the shipped default.
+- **Cold start** — when a subject has no usable personal evidence, the
+  population model is used, `personalization_applied` is false,
+  `cold_start` is true, and the reason is stated. It is an outcome, never a
+  method to request.
+
+Each held-out subject is cut in **wall-clock time** into a calibration
+region and a strictly later evaluation region; a window that straddles the
+boundary is excluded from both and listed. The population model is fitted
+on other subjects only. Population and personalized results are then scored
+over **exactly the same evaluation windows** and written as two separate
+results in `metrics.json`.
+
+Identifiers, timestamps, targets, target provenance, availability flags,
+modality flags, and modality-quality columns are **never** personalised.
+Signal quality describes the measurement; normalising it against a personal
+baseline would present it as a personal physiological value.
+
+See [Multimodal Fusion](docs/MULTIMODAL_FUSION.md).
+
+### What personalization is not
+
+Personalized calibration here means adapting a population model to one
+subject. It is **not** uncertainty calibration, not a confidence estimate,
+and nothing abstains; personalized confidence thresholds and selective
+prediction are Milestone 7.
+
+Population and personalized results are reported separately, which is what
+Milestone 6 acceptance criterion 3 asks for. **A difference between them
+computed on synthetic data is not evidence of a personalization benefit.**
+On this repository's generator the personalized variants score *worse* than
+the population baseline; that describes a generator whose targets track
+absolute feature levels, not a person and not personalization. Whether
+personalized baselines outperform population models is unanswered.
 
 ## Privacy
 
@@ -403,8 +536,13 @@ src/engagevr/         Python package
   features/           Windowed feature datasets: catalog, windowing,
                       aggregation, assembly, validation, synthetic (M5)
   training/           Splits, preprocessing, models, calibration, metrics,
-                      ablation, runner, artifacts (M5)
+                      ablation, runner, artifacts (M5); fusion algebra,
+                      modality experts, stacking, robustness, fusion
+                      metrics, fusion artifacts, fusion runner,
+                      personalization algebra and runner (M6)
   cli_milestone5.py   features-demo / baseline-demo / baseline-train
+  cli_milestone6.py   fusion-demo / fusion-train /
+                      personalization-demo / personalization-train
 configs/              YAML configuration files
 protocol/             Checked-in JSON Schema and contract fixtures (M4)
 scripts/              Model download, protocol-artefact generation
@@ -432,6 +570,7 @@ docs/                 Project documentation
 - [Baseline Models](docs/BASELINE_MODELS.md)
 - [Model Evaluation](docs/MODEL_EVALUATION.md)
 - [Experiment Tracking](docs/EXPERIMENT_TRACKING.md)
+- [Multimodal Fusion](docs/MULTIMODAL_FUSION.md)
 
 ## Disclaimer
 

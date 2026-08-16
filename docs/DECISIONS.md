@@ -1161,3 +1161,549 @@ WebSocket code paths.
 
 **Consequence:** `docs/ARCHITECTURE.md` is updated to match the implemented
 module layout. No module listed in the brief was omitted.
+
+---
+
+### DEC-049: Quality Is a Support Signal, Not a Fusion Modality
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** The feature catalog has five modality groups, one of which is
+`quality`. Milestone 6 fits one estimator per modality and weights their
+outputs. Treating capture-quality diagnostics as a sixth voice would let
+measurement conditions vote on a person's engagement.
+
+**Decision:** `FusionModality` has exactly four members — behavioural,
+head pose, rPPG, task. There is no `quality` member, so quality cannot
+become a measurement modality by accident rather than by decision.
+
+Capture-quality features, availability flags, and missingness indicators
+are **support/context signals**. They may inform the explicitly named
+quality-aware weighting strategy, and modality availability is always
+carried in the early-fusion matrix because that is how a missing modality
+is represented without fabricating a zero. `modality_quality__*` is
+excluded from experts and from the early-fusion matrix by default.
+
+**Consequence:** `parse_modality("quality")` raises with an explanation,
+and `fusion.modalities: [quality]` is rejected at configuration load with
+the same explanation. `FusionModality("quality")` is not constructible, so
+no future code path can smuggle it in.
+
+---
+
+### DEC-050: A Missing Modality Is an Absence, Never a Zero
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** The obvious implementations of late fusion — substitute a
+uniform probability vector, substitute the training mean, substitute zero —
+all convert "we could not measure it" into a measurement, which is the
+failure mode DEC-039 exists to prevent, moved one layer up.
+
+**Decision:** A modality that produced no prediction is represented through
+**availability**. Its effective weight is zero by construction
+(`availability_m = 0` in the weight equation), the remaining weights are
+renormalised over the contributors, and the exclusion is recorded with a
+reason. A window that cannot meet `minimum_modalities` is recorded as
+**unfused** with a stated reason and carries no prediction at all.
+
+The schema enforces it: a `ModalityWeight` that did not contribute must
+carry `normalized_weight == 0` and state why; a `FusionPrediction` may not
+give weight to a modality that produced no prediction; an unfused
+prediction may not carry a predicted class, a predicted value, or
+probabilities.
+
+**Consequence:** Coverage becomes a first-class result. A strategy that
+scored well on a third of its windows is visibly different from one that
+scored the same on all of them, and both numbers are always stored
+together.
+
+---
+
+### DEC-051: The Quality-Aware Weight Equation Is Documented, Not Tuned
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** Quality-aware fusion needs a rule for turning a signal-quality
+value into a weight. Any rule chosen by looking at a result on synthetic
+data would be a fact about the generator.
+
+**Decision:** One equation, stated in the schema, in the configuration
+file, and in `docs/MULTIMODAL_FUSION.md`:
+
+```
+raw_effective_weight_m = base_weight_m * availability_m * normalised_quality_m
+normalized_weight_m    = raw_effective_weight_m / sum over contributors
+```
+
+Base weights default to a deterministic 1.0 for every modality — the
+control. **No optimised weight set is shipped**, and none was chosen after
+looking at a score.
+
+Missing quality is handled by a stated policy: `documented_fallback`
+substitutes a neutral 0.5 (the midpoint of the range) and records
+`quality_source=documented_fallback` on the weight; `exclude` drops the
+modality and records the reason. Neither treats missing quality as perfect
+quality, and no policy that does is offered. Task telemetry has no
+signal-quality channel at all, so this is a normal condition rather than an
+anomaly.
+
+`minimum_quality` defaults to 0.0 because no empirically validated quality
+cut-off exists for these signals; `minimum_effective_weight` defaults to
+1e-9 as a numerical guard against normalising by ~0, not as a modelling
+threshold. Both defaults are stated as such in the configuration file.
+
+**Consequence:** Signal quality stays a statement about the measurement.
+The weight it produces is recorded raw and normalised beside the quality
+value and its source, so the arithmetic is reconstructible without
+re-running anything, and low quality can never be read as low engagement.
+
+---
+
+### DEC-052: An Expert Learns Only From Windows Its Modality Observed
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** A modality expert fitted on every training row would be fitted
+mostly on imputed medians for the rows where its modality was absent, and
+would then emit confident predictions for windows it never observed.
+
+**Decision:** Each expert is fitted on the fit-group rows in which its own
+modality contributed evidence, and predicts only for test rows in which it
+did. Below 10 such rows, or fewer than 2 independent groups, or fewer than
+two classes, the expert returns **unavailable with a reason** rather than a
+prediction. Row and group counts are recorded on every expert.
+
+**Consequence:** An expert never speaks about a window it could not see.
+The refusal is a recorded result, not a silent gap, and the two thresholds
+are stated as engineering defaults rather than validated cut-offs.
+
+---
+
+### DEC-053: Calibration Is Per Expert, Before Fusion, and Only Once
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** Late-fusion classification can calibrate the experts, the
+fused output, or both.
+
+**Decision:** Calibration happens per expert before fusion, and to the
+early-fusion estimator. **No post-fusion calibrator is fitted.**
+Calibrating twice would make the reported probability the output of two
+corrections with no way to attribute either, and there is no documented
+reason in this project to prefer that. The fused probabilities are still
+*evaluated* for calibration; nothing is fitted to them.
+
+The stacked strategy is the exception in the other direction: it consumes
+**uncalibrated** expert probabilities at both meta-training and
+meta-inference time, because applying a meta-model to a different input
+distribution from the one it was fitted on is a silent error no metric
+would reveal.
+
+Two shared-code consequences: `MINIMUM_CALIBRATION_SAMPLES_PER_CLASS = 5`
+was added to `training/calibration.py`, because `CalibratedClassifierCV`
+resolves `cv=None` to a 5-fold stratified splitter and cross-validates the
+calibration set even over a `FrozenEstimator`; a class thinner than the
+fold count cannot be split, and the pipeline now records an unavailable
+calibrator with a reason instead of failing the fold.
+
+**Consequence:** `calibration.json` states the placement in words. A
+calibrated probability remains a statement about outcome frequency, kept in
+separate fields from signal quality throughout.
+
+---
+
+### DEC-054: Stacking Is Implemented, Leakage-Checked, and Off by Default
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** A stacker trained on expert predictions about the experts' own
+training rows learns to trust memorised predictions, and the weights it
+derives do not transfer. The failure is invisible in the metrics.
+
+**Decision:** Stacking is implemented with grouped out-of-fold construction
+inside each outer training portion, and `assert_out_of_fold` re-checks the
+property independently before the meta-model is fitted. Three violations
+are detected and raised on: a row predicted by experts fitted on its own
+group, a row predicted by experts fitted on an outer-test group, and a
+meta-training row from outside the outer-training groups. Each has a test.
+
+Meta-models are `LogisticRegression` and `Ridge`; a configuration naming
+anything else is rejected. There is no neural stacker.
+
+An unavailable expert contributes a **missing value** to the meta matrix,
+never a zero, and the meta-model's own fold-local imputer adds a
+missingness indicator.
+
+`fusion.stacking.enabled` defaults to **false**: it costs an extra
+inner-fold pass over every fold, and the three default strategies answer
+the milestone's questions without it.
+
+**Consequence:** A future change that reintroduces in-sample meta-training
+fails loudly rather than producing a plausible number.
+
+---
+
+### DEC-055: Scenarios Are Evaluation-Time; Synthetic Dropout Is Dataset-Level
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** "What happens when rPPG is missing?" has two readings: a
+system trained normally meets a degraded window, or a system is trained on
+a dataset in which the modality was never captured. They are different
+questions and need different mechanics.
+
+**Decision:** Both are implemented and kept apart.
+
+Missing-modality **scenarios** are applied at evaluation time only. Models
+are trained once on the recorded availability and then met with each
+deterministic availability pattern. A scenario removes availability and
+nothing else: it never rewrites a measurement, never zero-fills a feature,
+and never touches a target, and it cannot make an absent modality appear
+present.
+
+Synthetic modality **dropout** changes the dataset's availability before
+folding, so it affects training as well. It is seeded, decided by a pure
+function of (seed, window id, modality) so it is order-independent, drops
+whole modality groups coherently, and records its configuration. **It is
+refused in scientific mode**, because it fabricates an availability pattern
+that no measurement produced.
+
+**Consequence:** Ten named scenarios can be compared on one set of fitted
+models and one set of folds, and a reader can tell which question a number
+answers.
+
+---
+
+### DEC-056: Expert Disagreement Is a Diagnostic, Not Uncertainty
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** Ensemble spread is easy to compute and easy to mislabel.
+Calling it uncertainty would pre-empt Milestone 7 and would imply a
+calibration this quantity does not have.
+
+**Decision:** Disagreement is recorded as an **ensemble-disagreement
+diagnostic** with explicit definitions: distinct predicted classes,
+unanimity, mean pairwise probability distance, fused-probability entropy,
+prediction standard deviation, prediction range. Windows with fewer than
+two available experts contribute to no summary and are counted separately.
+
+Every stored summary carries a required `note` stating that it is not a
+calibrated uncertainty estimate, not signal quality, not model confidence,
+and that it does not trigger abstention. Nothing in this milestone gates a
+prediction on it.
+
+**Consequence:** Milestone 7 can introduce uncertainty-aware inference and
+abstention without first having to retract a claim.
+
+---
+
+### DEC-057: Validation-Derived Weights Use Bounded Skill, Not Reciprocal Error
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** The common rule for performance-derived fusion weights,
+`w = 1 / error`, diverges when an expert scores perfectly on a small
+validation set. Clamping it requires a threshold with no justification.
+
+**Decision:** Bounded, scale-free skill scores computed on inner validation
+groups drawn only from the outer training portion:
+
+- classification: `w = max(0, (balanced_accuracy − 1/K) / (1 − 1/K))`
+- regression: `w = max(0, 1 − MAE / MAE_of_predicting_the_mean)`
+
+Both lie in `[0, 1]` and cannot diverge. When every weight is zero the run
+falls back to deterministic equal weights and records that it did, with the
+reason. Each fold records the metric, its definition, the exact groups
+used, the raw scores, and the resulting weights.
+
+**Consequence:** The outer test fold contributes to no weight, and a test
+asserts that the recorded groups are a subset of the fold's training
+groups.
+
+---
+
+### DEC-058: The Fusion Run Extends the Milestone 5 Experiment Format
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** A fusion run needs several documents Milestone 5 has no place
+for. Replacing the format would orphan the existing runs and the tooling
+that reads them.
+
+**Decision:** The Milestone 5 directory layout is kept and extended with
+`fusion_config.json`, `experts.json`, `fusion_metrics.json`,
+`robustness.json`, `expert_predictions.parquet`, and
+`fusion_weights.parquet`. `metrics.json` is the same `MetricsDocument`, with
+one `ModelResult` per fusion strategy (`model_kind: "fusion"`) and one per
+unimodal expert (`model_kind: "unimodal_expert"`), so the Milestone 5
+metric machinery is reused rather than duplicated.
+
+`ExperimentRun` gained an optional `required_artifacts` parameter so a
+fusion run can declare a **larger** required set. The Milestone 5 default is
+unchanged.
+
+`expert_predictions.parquet` is written for the reference scenario only: a
+scenario does not change what an expert computed, only which experts were
+allowed to contribute, and that is in `fusion_weights.parquet` for every
+scenario.
+
+**Consequence:** Existing readers of a Milestone 5 run directory keep
+working. Still no MLflow, no DVC, and no Docker; tests assert none appears.
+
+---
+
+### DEC-059: Modules Beyond the Milestone 6 Filename List
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** `docs/ARCHITECTURE.md` listed one module, `training/fusion.py`,
+for the whole milestone. The milestone contains several separable concerns
+with different failure modes.
+
+**Decision:** The fusion layer is split by concern:
+
+| Module | Concern |
+|---|---|
+| `training/fusion.py` | pure algebra: modality columns, weights, combination, disagreement |
+| `training/experts.py` | fitting one estimator per modality, and refusing to |
+| `training/stacking.py` | out-of-fold construction and the leakage assertion |
+| `training/robustness.py` | scenarios and deterministic synthetic dropout |
+| `training/fusion_metrics.py` | coverage, contribution, disagreement summaries |
+| `training/fusion_artifacts.py` | run identity, split fingerprint, Parquet tables |
+| `training/fusion_runner.py` | fold orchestration and artifact assembly |
+| `cli_milestone6.py` | `fusion-demo` / `fusion-train` |
+
+`cli_milestone6.py` follows the Milestone 4 and 5 precedent (DEC-013,
+DEC-048): `__main__` stays a thin dispatcher and the fusion commands can be
+tested without importing the webcam, rPPG, or WebSocket code paths.
+
+**Consequence:** `docs/ARCHITECTURE.md` is updated to match the implemented
+layout. No behaviour listed for the milestone was omitted; the pure algebra
+in `training/fusion.py` is testable without fitting anything, which is what
+made the weight and combination rules cheap to pin down.
+
+---
+
+### DEC-060: Personalization Layers on the Fused Population Prediction
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** Milestone 6 acceptance criterion 3 requires personalized and
+population baselines to be reported separately. Personalization could have
+been built as its own model stack, or layered onto the existing fusion
+output. A separate stack would duplicate the fold machinery and make the
+two reports incomparable.
+
+**Decision:** Personalization layers on top of a **population reference
+model**, which is the early-fusion estimator over the configured modality
+groups (`early_fusion_columns`, unchanged). The documented path is
+`early-fusion population prediction -> subject calibration/correction ->
+personalized prediction`.
+
+Early fusion rather than a late-fusion strategy is used as the reference
+because it yields exactly one population prediction per window with no
+weighting step to disturb: a per-subject correction applied on top of a
+re-weighted combination would confound two adjustments and neither would be
+attributable.
+
+No fusion weight is retuned by personalization, and the population
+prediction is retained unchanged on every record — a personalized
+prediction is an addition to it, never a replacement.
+
+**Consequence:** `metrics.json` carries two `ModelResult` entries,
+`population` and `personalized`, over identical evaluation windows. Tests
+assert the row counts match and that the population column is always
+populated.
+
+---
+
+### DEC-061: The Calibration/Evaluation Split Is Temporal, Not Positional
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** A personal baseline must come from windows that precede the
+windows it is evaluated on. Taking the first *N* rows is not sufficient:
+`configs/defaults.yaml` permits overlapping windows, and with a 30-second
+window stepped every 15 seconds the window immediately after the
+calibration region still shares evidence with it.
+
+**Decision:** A held-out subject's windows are ordered by
+`(window_start_utc, window_end_utc, window_index, window_id)`. The first
+`calibration_windows` form the calibration region; the **boundary** is the
+latest `window_end_utc` in it; a later window joins the evaluation region
+only if its `window_start_utc` is at or after the boundary. A window
+straddling the boundary is **excluded from both regions** and recorded in
+`excluded_overlap_window_ids`.
+
+`PersonalCalibrationSplit` refuses to validate when the calibration region
+does not end before the evaluation region begins, so an unordered split
+cannot be persisted. A window with no timestamp is refused outright rather
+than ordered by row position, which is not a temporal order.
+
+`ModellingFrame` gained optional `window_start_utc`, `window_end_utc`,
+`window_indices`, and `windows_overlap` fields to carry the timing. They
+are provenance, never predictors, and `assert_no_leakage` still refuses
+them in any predictor matrix.
+
+**Consequence:** A subject who cannot supply both regions is recorded as
+unavailable with a reason and excluded from both reports. The protocol is
+never weakened to keep a subject in the personalized report.
+
+---
+
+### DEC-062: Both Documented Corrections, and Why They Are Regularised
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** A few labelled calibration windows cannot support a
+subject-specific model. They can support a small, interpretable correction
+to a population model's output — provided it degrades gracefully when the
+evidence is thin.
+
+**Decision:** Two corrections, both fitted from calibration windows only.
+
+*Regression* uses the bias correction exactly as specified:
+
+    b_s = mean(y_calibration - y_population_prediction)
+    y_personalized = y_population_prediction + b_s
+
+*Classification* uses a regularised per-subject log-odds shift, with `K`
+classes, `n` labelled calibration windows, smoothing `alpha`, and shrinkage
+constant `kappa`:
+
+    observed_c = (count_c + alpha) / (n + alpha*K)
+    expected_c = (sum_w p_population_c(w) + alpha) / (n + alpha*K)
+    lambda     = n / (n + kappa)
+    delta_c    = lambda * (log(observed_c) - log(expected_c))
+    p_personalized_c ∝ p_population_c * exp(delta_c)
+
+Both terms are smoothed identically, which gives the property that matters:
+`delta_c` is **exactly zero** when the subject's calibration labels match
+what the population model predicted on average, so a subject the population
+model already fits is left alone. `lambda` shrinks the shift toward zero in
+proportion to how little evidence there is.
+
+`kappa = 5.0` and `alpha = 1.0` are engineering defaults. No validated
+value exists for either, and no attempt was made to tune them: tuning on
+synthetic data would fit this repository's own generator.
+
+**Consequence:** Corrected probabilities are finite, non-negative, and
+renormalised; a row that cannot be renormalised raises rather than being
+emitted. `calibration_targets` records the label used per calibration
+window by id, and a test asserts no evaluation window id ever appears
+there.
+
+---
+
+### DEC-063: Cold Start Is an Outcome, Not a Requestable Method
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** The specification lists cold-start mode alongside the other
+personalization modes. Offering it as a method name would make an *outcome*
+("this subject had no usable evidence") indistinguishable from an
+*intention* ("evaluate without personal evidence").
+
+**Decision:** `PersonalizationMethod.COLD_START` exists and is recorded on
+every prediction that fell back, but it is not in `REQUESTABLE_METHODS`.
+Both the typed configuration and `configs/defaults.yaml` reject it by name
+and point the reader at `calibration_windows: 0`, which is how cold-start
+behaviour is requested.
+
+Falling back is always explicit: `personalization_applied=false`,
+`cold_start=true`, a stated reason, and — enforced by the schema — a
+personalized output that reproduces the population output **exactly**. No
+run borrows another subject's baseline, substitutes a global statistic and
+calls it personal, or fabricates one.
+
+**Consequence:** Coverage is a first-class number.
+`personalization_coverage` is the fraction of evaluated subject-folds that
+were actually personalised, and on the shipped synthetic dataset it is
+0.700 for the classification targets — nine of thirty subject-folds have
+only one class in their five calibration windows and fall back, which is
+the intended behaviour rather than a failure.
+
+---
+
+### DEC-064: Training Subjects Are Normalised Under the Same Chronological Rule
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** With personal-baseline normalization, a training subject's
+baseline could legitimately use every one of their training windows — they
+are training data, so there is no leakage. The first implementation did
+exactly that, and the held-out subjects' regression predictions were wildly
+out of range (RMSE 3.38 against a target range of `[0, 1]`).
+
+**Decision:** A training subject's baseline is estimated from their own
+earliest `calibration_windows` windows within the training portion, under
+the identical chronological rule applied to held-out subjects.
+
+The cause of the failure was not leakage but a **scale mismatch**:
+estimating `sigma_s` from ten windows and then applying a `sigma_s`
+estimated from five produced systematically larger z-scores at evaluation
+time, and the estimator met a differently-scaled matrix than it was fitted
+through. The normalisation a model is fitted through must be the
+normalisation it is deployed through. After the change, the same run's RMSE
+fell to 0.47.
+
+Only held-out subjects' baselines are persisted to
+`personal_baselines.json`: a training subject has no calibration/evaluation
+boundary to audit, and recording thousands of them would add bulk without
+adding evidence.
+
+**Consequence:** The remaining gap between the population and personalized
+regression results is a property of the generator — its targets track
+absolute feature levels, which within-subject z-scoring removes — and is
+reported as such rather than tuned away.
+
+---
+
+### DEC-065: Balanced Accuracy Is Computed From the Recall Vector
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** The complete test run emitted one warning: scikit-learn's
+`UserWarning: y_pred contains classes not in y_true`, from
+`balanced_accuracy_score` during a heavy missing-modality robustness case.
+Suppressing warnings globally would hide genuine ones; suppressing this
+message specifically would hide it in cases where it is informative.
+
+**Decision:** Balanced accuracy is derived from the per-class recall vector
+that `classification_metrics` already computes via
+`precision_recall_fscore_support(..., zero_division=np.nan)`, rather than
+by calling `balanced_accuracy_score`.
+
+The two are the same quantity by definition: balanced accuracy is the
+unweighted mean of recall over the classes present in `y_true`, and
+`zero_division=np.nan` marks exactly the absent classes so `_macro` excludes
+them. `balanced_accuracy_score` derives it from an *unlabelled* confusion
+matrix, which is why a predicted-but-absent class becomes an all-zero row
+and triggers the warning before being dropped.
+
+Equivalence was checked over 200 randomly generated label/prediction pairs
+before the change, and three regression tests now pin it, including the
+exact heavy-dropout condition.
+
+**Consequence:** The normal test run completes with **no warnings**. The
+Milestone 5 rule is untouched: a metric whose prerequisites are unmet is
+still `None` with a stated reason, never zero.

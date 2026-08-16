@@ -159,9 +159,23 @@ class ExperimentRun:
         "metrics.json",
     )
 
-    def __init__(self, directory: Path, run_id: str) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        run_id: str,
+        *,
+        required_artifacts: Sequence[str] | None = None,
+    ) -> None:
         self.directory = directory
         self.run_id = run_id
+        # A run may declare a larger required set than the baseline one — a
+        # fusion run must also produce its fusion documents before it may
+        # claim completion — but never a smaller one.
+        self.required_artifacts: tuple[str, ...] = (
+            self.REQUIRED_ARTIFACTS
+            if required_artifacts is None
+            else tuple(required_artifacts)
+        )
         self.directory.mkdir(parents=True, exist_ok=True)
         (self.directory / "models").mkdir(parents=True, exist_ok=True)
         self._written: list[str] = []
@@ -222,7 +236,7 @@ class ExperimentRun:
         """Required artifacts that are absent from the run directory."""
         return tuple(
             name
-            for name in self.REQUIRED_ARTIFACTS
+            for name in self.required_artifacts
             if not (self.directory / name).exists()
         )
 

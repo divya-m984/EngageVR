@@ -225,6 +225,18 @@ for which the quantity is *defined*. A class with no predicted instances
 has undefined precision; it is excluded from the mean rather than counted
 as zero, and its exclusion is recorded in `unavailable_metrics`.
 
+**Balanced accuracy** — the unweighted mean of recall over the classes
+that are *present in the true labels*. It is computed from the same
+per-class recall vector as macro recall rather than through
+`balanced_accuracy_score`, which derives it from an unlabelled confusion
+matrix and warns whenever the predictions name a class the truth does not
+contain — a condition a heavy missing-modality scenario produces routinely.
+The two definitions agree exactly; equivalence was checked over 200
+randomly generated label/prediction pairs and is pinned by three
+regression tests, including that exact heavy-dropout case. Deriving it here
+keeps a misleading warning out of the run log without suppressing any
+warning (DEC-065).
+
 **Multiclass Brier score** —
 `mean_i || p_i - onehot(y_i) ||²`, the mean squared Euclidean distance
 between the predicted probability vector and the one-hot true vector.
@@ -376,3 +388,79 @@ Tests assert that two runs of one configuration produce identical
 **Pending:** every one of these is a property of the software. None has
 been exercised against real participant-labelled data, because none
 exists.
+
+## Reuse by the Milestone 6 fusion runner
+
+The fusion runner reuses this design unchanged. It calls the same
+`build_splits` with the same parameters, so a baseline run and a fusion run
+over the same dataset, target, fold count, and seed produce a
+byte-identical split manifest — asserted by a test — and it fingerprints
+that manifest with `split_manifest_fingerprint` so "these strategies were
+compared on exactly the same folds" is checkable after the fact.
+
+The classification and regression metrics, the undefined-stays-null rule,
+the documented macro / Brier / ECE / log-loss conventions, and the
+equal-weight fold aggregation are the same functions. Fusion adds
+diagnostics beside them — coverage, available-expert count,
+missing-modality rate, modality contribution counts, mean normalised
+weights, and expert disagreement — never in place of them.
+
+Two evaluation properties are specific to fusion:
+
+- **Metrics describe covered windows.** A strategy scores the windows it
+  produced a prediction for; `fusion.coverage` states what fraction of the
+  evaluated windows that was. Both numbers are always stored together,
+  because a score over a subset is not comparable to a score over the whole
+  fold unless the reader can see both.
+- **Calibration is placed once.** Per expert, before fusion, and on the
+  early-fusion estimator; never after fusion. Fused probabilities are
+  *evaluated* for calibration but nothing is fitted to them. One shared
+  addition was needed — `MINIMUM_CALIBRATION_SAMPLES_PER_CLASS = 5`,
+  because `CalibratedClassifierCV` cross-validates the calibration set even
+  over a `FrozenEstimator` — and an unmet minimum records an unavailable
+  calibrator with a reason rather than failing the fold.
+
+See `docs/MULTIMODAL_FUSION.md`.
+
+## Reuse by the Milestone 6 personalization runner
+
+The personalization runner reuses the same `build_splits` call, the same
+fold-local preprocessing, the same probability calibration on disjoint
+groups, and the same classification and regression metrics. It adds one
+evaluation rule of its own.
+
+**The two reports must cover the same rows.** Within each outer fold, every
+held-out subject is cut in wall-clock time into a calibration region and a
+strictly later evaluation region, and *both* the population-only model and
+the personalized model are scored on that evaluation region — never on
+different subsets. `PersonalizationFoldResult` refuses to validate when the
+two metric documents disagree on sample count, so a comparison over
+different data cannot be persisted. `metrics.json` carries the two results
+as separate `ModelResult` entries (`model_kind: "population"` and
+`"personalized"`), which is what Milestone 6 acceptance criterion 3 asks
+for.
+
+Beside them, `personalization.json` records the calibration window count,
+the evaluation window count, the number of windows excluded for straddling
+the boundary, the cold-start count, the unavailable count, and
+
+```
+personalization_coverage = personalized_subject_count
+                         / (personalized_subject_count + cold_start_subject_count)
+```
+
+Coverage matters for the same reason `fusion.coverage` does: a personalized
+score computed over the subjects that *could* be personalised is not
+comparable to one over all of them unless the reader can see how many fell
+back.
+
+**No aggregate declares a winner.** The wording used in every document and
+every printed line is: *population and personalized software-check results
+are reported separately; synthetic differences are not evidence of a
+personalization benefit.*
+
+Two distinct things are called calibration and are kept in separate files:
+probability calibration of the population model (`calibration.json`) and
+per-subject adaptation (`personalization.json`). Neither is a confidence
+estimate and neither withholds a prediction; abstention and selective
+prediction are Milestone 7.

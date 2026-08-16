@@ -1,9 +1,9 @@
 # EngageVR -- Progress Tracker
 
-## Current Milestone: 5 -- Windowed Feature Datasets and Interpretable Baselines
+## Current Milestone: 6 -- Multimodal Fusion
 
-**Status:** Milestone 5 baseline-model pipeline implementation complete;
-scientific evaluation on real participant-labelled data pending.
+**Status:** Milestone 6 multimodal-fusion implementation complete; scientific
+evaluation on real participant-labelled multimodal data pending.
 
 ## Milestone History
 
@@ -447,7 +447,246 @@ wheel variant remains.
 
 ### Milestone 6: Multimodal Fusion
 
-**Status:** Not started
+**Started:** 2026-08-16
+**Completed (implementation):** 2026-08-16
+**Status:** Milestone 6 multimodal-fusion implementation complete; scientific
+evaluation on real participant-labelled multimodal data pending.
+
+**Dependencies added:** **none.** Early fusion, weighted averaging,
+quality-aware weighting, validation-derived weighting, and stacking are all
+implementable with the installed NumPy, SciPy, scikit-learn, pandas,
+PyArrow, and joblib stack. No PyTorch, TensorFlow, Keras, XGBoost,
+LightGBM, CatBoost, SHAP, Optuna, MLflow, DVC, Streamlit, Docker, or
+database was introduced.
+
+**Delivered:**
+
+- **Fusion schemas** (`schemas/fusion.py`, DEC-049, DEC-050): `FusionModality`
+  with exactly four measurement modalities and no `quality` member;
+  `FusionStrategy`, `FusionConfiguration`, `QualityWeightingConfiguration`,
+  `StackingConfiguration`, `RobustnessConfiguration`, `ModalityAvailability`,
+  `ModalityPrediction`, `ModalityWeight`, `FusionPrediction`, `ExpertRecord`,
+  `ExpertDocument`, `ExpertDisagreementSummary`, `FusionDiagnostics`,
+  `FusionFoldResult`, `FusionStrategyResult`, `ValidationWeightRecord`,
+  `StackingProvenanceRecord`, `UnimodalControlResult`,
+  `MissingModalityScenario`, `RobustnessResult`, `RobustnessDocument`,
+  `FusionEvaluation`, `FusionExperimentManifest`. All `extra="forbid"`.
+- **Fusion algebra** (`training/fusion.py`): modality column selection in
+  catalogue order, the documented weight equation, probability and
+  regression combination with vocabulary alignment, and interpretable
+  disagreement helpers. Pure functions; no estimator, no fold, no artifact.
+- **Modality experts** (`training/experts.py`, DEC-052): one estimator per
+  modality, fitted only on the fit-group rows its modality observed, with
+  refusal-with-a-reason below 10 rows, 2 groups, or 2 classes.
+- **Leakage-safe stacking** (`training/stacking.py`, DEC-054): grouped
+  out-of-fold construction inside each outer training portion, plus an
+  independent `assert_out_of_fold` detecting in-sample meta-training,
+  outer-test contamination, and out-of-range rows. Disabled by default.
+- **Robustness** (`training/robustness.py`, DEC-055): ten deterministic
+  missing-modality scenarios and order-independent seeded synthetic
+  dropout, refused in scientific mode.
+- **Fusion metrics** (`training/fusion_metrics.py`, DEC-056): coverage,
+  available-expert counts, missing-modality rates, contribution counts,
+  mean normalised weights, and disagreement summaries carrying a required
+  note that they are not uncertainty.
+- **Fusion artifacts** (`training/fusion_artifacts.py`, DEC-058):
+  deterministic run identity over the split-manifest fingerprint and the
+  full fusion configuration, plus the three fusion Parquet tables.
+- **Fusion runner** (`training/fusion_runner.py`): fold orchestration
+  reusing the Milestone 5 splitter, preprocessing, calibration, and metric
+  machinery unchanged.
+- **Personalization** (`schemas/personalization.py`,
+  `training/personalization.py`, `training/personalization_runner.py`):
+  population-only baseline, personal-baseline feature calibration,
+  few-shot correction, population model plus user-specific correction, and
+  an explicit cold-start path; a chronological per-subject
+  calibration/evaluation split; separate population and personalized
+  reporting over identical evaluation windows (DEC-060 -- DEC-064).
+- **CLI**: `fusion-demo`, `fusion-train` (DEC-059),
+  `personalization-demo`, `personalization-train`.
+- **Configuration**: a validated `fusion` section in `configs/defaults.yaml`
+  rejecting `quality` as a modality, duplicate strategies and modalities,
+  empty strategy sets, unsatisfiable minimum-modality counts, out-of-range
+  quality values, non-positive base weights, and stacking configurations
+  that cannot satisfy the grouped out-of-fold requirement; a validated
+  `personalization` section rejecting `cold_start` as a requested method,
+  `quality` as a modality, duplicate or single modalities, and a
+  calibration-window count that could never satisfy the configured
+  minimum.
+- **Documentation**: `docs/MULTIMODAL_FUSION.md`; updates to README,
+  ARCHITECTURE, LIMITATIONS, MODEL_EVALUATION, EXPERIMENT_TRACKING,
+  REFERENCES, DECISIONS.
+
+**Shared-code changes (additive):**
+
+- `ExperimentRun` gained an optional `required_artifacts` parameter so a
+  fusion run can declare a larger required artifact set; the Milestone 5
+  default is unchanged.
+- `training/calibration.py` gained
+  `MINIMUM_CALIBRATION_SAMPLES_PER_CLASS = 5`: `CalibratedClassifierCV`
+  cross-validates the calibration set even over a `FrozenEstimator`, so a
+  class thinner than the fold count cannot be split. The pipeline now
+  records an unavailable calibrator with a reason instead of failing the
+  fold (DEC-053).
+- `training/runner.py` exposes `linear_interpretation_records` so the
+  fusion runner records the same interpretation data without duplicating
+  the extraction logic.
+- `ModellingFrame` gained optional `window_start_utc`, `window_end_utc`,
+  `window_indices`, and `windows_overlap` fields. Window timing is
+  provenance, never a predictor; `assert_no_leakage` still refuses it in
+  any predictor matrix (DEC-061).
+- `training/metrics.py` derives balanced accuracy from the per-class recall
+  vector instead of calling `balanced_accuracy_score`. The two are the same
+  quantity by definition; deriving it removes the only warning the test
+  suite emitted, without suppressing any warning (DEC-065).
+
+**Verification:**
+- `uv lock --check` -- resolved
+- `uv sync --locked` -- clean
+- `uv tree` -- no duplicate or conflicting packages; one OpenCV wheel
+- `uv run ruff format --check .` -- all files formatted
+- `uv run ruff check .` -- all checks passed
+- `uv run mypy src` -- no issues in 105 source files
+- `uv run pytest` -- **1606 passed, 1 skipped, no warnings**
+- `uv run pytest -m hardware` -- 1 skipped (no physical webcam)
+- `uv run pre-commit run --all-files` -- all passed
+- `uv run python scripts/generate_protocol_artifacts.py` -- no drift
+- `make check` -- all passed
+
+This completion pass added 169 tests: 165 across four new personalization
+modules (`test_personalization_core.py`,
+`test_personalization_schemas.py`, `test_personalization_runner.py`,
+`test_cli_personalization.py`) and 4 in `test_metrics.py` pinning the
+balanced-accuracy definition against scikit-learn's, including the exact
+heavy-dropout condition that used to warn. Milestone 6 has added 410 tests
+in total.
+
+**No dependency was added at any point in this milestone.**
+
+**Synthetic software-check demonstrations (SYNTHETIC data only):**
+
+A 1200-row deterministic dataset (30 synthetic subjects x 2 sessions x 20
+windows, seed 42, fingerprint `a8c032e0bbff3d3d...`) was fused for all four
+targets -- `engagement_class`, `cognitive_load_class`, `engagement_score`,
+`cognitive_load_score` -- with early, uniform-late, and quality-late
+strategies over 5 grouped folds and all ten missing-modality scenarios;
+plus one run with validation-weighted and stacked fusion, and one seeded
+synthetic-dropout run.
+
+Programmatic inspection of the resulting artifacts confirmed: every fused
+probability row finite, non-negative, and summing to one; every fused
+regression value finite; contributing fusion weights summing to one in
+every window, strategy, and scenario; every non-contributing modality
+carrying exactly zero weight and a stated exclusion reason; no unavailable
+expert carrying a class, a value, or probabilities; every expert feature
+belonging to its own modality; no target, provenance, identifier, or
+timestamp column in any predictor matrix; no group appearing on both sides
+of any fold; the split audit passing; every checksum verifying; every row
+flagged synthetic and none scientifically eligible; and no MLflow, DVC, or
+Docker artifact anywhere.
+
+Coverage fell as expected under modality loss -- 1.000 with all modalities,
+0.989 with both camera modalities absent, and 0.885--0.911 in the
+single-modality scenarios -- and the shortfall is recorded as unfused
+windows with stated reasons rather than as predictions.
+
+Re-running one complete configuration with the same seed reproduced the
+same run id (`engagement_class-fusion-selfcheck-7f11318c2232`) and
+byte-identical `metrics.json`, `fusion_metrics.json`, `splits.json`,
+`robustness.json`, `fusion_config.json`, `experts.json`, and
+`checksums.json`. Only the manifest's wall-clock fields differ, which is
+the intended exclusion.
+
+**Synthetic personalization demonstrations (SYNTHETIC data only):**
+
+The same 1200-row dataset was run through `personalization-demo` for all
+four targets, over 5 grouped folds with 5 calibration windows per held-out
+subject and the default `personal_baseline_and_correction` method. All four
+exited 0.
+
+| Target | Calibration windows | Evaluation windows | Excluded at boundary | Personalized | Cold start | Coverage |
+|---|---|---|---|---|---|---|
+| `engagement_class` | 150 | 1050 | 0 | 21 | 9 | 0.700 |
+| `cognitive_load_class` | 150 | 1050 | 0 | 21 | 9 | 0.700 |
+| `engagement_score` | 150 | 1050 | 0 | 30 | 0 | 1.000 |
+| `cognitive_load_score` | 150 | 1050 | 0 | 30 | 0 | 1.000 |
+
+The nine cold starts on each classification target are subjects whose five
+calibration windows contained only one class, which is below the
+`minimum_calibration_classes` gate. They fall back to the population model
+with the reason recorded, which is the intended behaviour.
+
+Programmatic inspection of all four runs confirmed: no evaluated subject
+appears in any population training group; every calibration region ends at
+or before its evaluation region begins; no window is in both regions and no
+window is its own calibration window; every recorded baseline source window
+is a calibration window; no calibration-target record names an evaluation
+window; every population and personalized probability row is finite,
+non-negative, and sums to one; every regression prediction is finite; every
+cold-start row reproduces the population row exactly and states a reason;
+the population and personalized metrics cover identical per-fold row counts;
+only `feat__` columns of the measurement modalities were normalised (no
+quality, availability, identifier, timestamp, or target column); every
+checksum verifies; every row is flagged synthetic and none is
+scientifically eligible.
+
+Re-running `engagement_class` with the same seed reproduced the run id
+`engagement_class-personalization-selfcheck-41fbcc30a3aa` and
+byte-identical `personalization.json`, `personal_baselines.json`,
+`metrics.json`, `splits.json`, `personalization_config.json`,
+`calibration.json`, and `checksums.json`. Only the manifest's wall-clock
+fields differ.
+
+**On the numbers themselves:** on this generator the personalized variants
+score *worse* than the population baseline on every target. That is not a
+finding about personalization and it is not a defect. This repository's
+synthetic targets track absolute feature levels, and within-subject
+z-scoring removes exactly the between-subject variation they depend on. It
+is reported as observed rather than tuned away, because tuning it away
+would be fitting this repository's own generator. **No personalization
+benefit is claimed anywhere, in either direction.**
+
+**No metric from any of these runs is reported here, in any artifact, or in
+any document as performance.** They are software self-checks on data this
+repository generated.
+
+**Milestone 6 acceptance criteria:**
+
+| Criterion | Status |
+|-----------|--------|
+| 1. System remains functional with missing signals | **Met for the implementation.** Ten deterministic scenarios and optional seeded dropout; coverage and unavailable-fusion counts recorded per scenario and strategy; late fusion renormalises over survivors; early fusion meets the real missing-modality input shape; a window that cannot meet the minimum-modality rule is refused with a reason rather than given a fabricated prediction. Never exercised against a real signal failure, because none exists. |
+| 2. Quality-aware fusion is compared with naive fusion | **Met for the implementation.** `quality_late` and `uniform_late` are evaluated on identical folds with identical experts, with weights, coverage, and diagnostics recorded for both. The comparison is a software self-check on synthetic data; it establishes no superiority and none is claimed. |
+| 3. Personalized and population baselines are separately reported | **Met for the software implementation.** For each held-out subject, a population-only result and a personalized result are generated over identical evaluation windows and written as two separate `ModelResult` entries in `metrics.json`, with per-fold splits, corrections, coverage, and cold-start counts in `personalization.json`. Per-participant baselines, z-scoring, few-shot correction, and an explicit cold-start path are implemented. **No personalization benefit is claimed**, and none could be: the comparison is a software self-check on synthetic data. |
+
+**Not met / pending:**
+1. **Scientific evaluation on real participant-labelled multimodal data.**
+   No validated EngageVR participant dataset exists and no approved
+   engagement or cognitive-load label exists.
+2. Personalization has never been exercised on a real subject, a real
+   session boundary, or a real label. `RQ2` -- whether personalized
+   baselines outperform population models -- remains **unanswered**, and
+   the synthetic self-check cannot answer it.
+3. Physical-webcam validation remains pending (from Milestone 2/3), so the
+   behavioural, head-pose, rPPG, and quality channels being fused have
+   never been produced from a live camera.
+4. UBFC-rPPG validation remains pending, so the rPPG modality's own
+   accuracy is unknown.
+5. Unity compilation and runtime validation remain pending, so the task
+   modality has never been fed by the Unity client.
+
+**Decisions recorded:** DEC-049 through DEC-065 (see `docs/DECISIONS.md`)
+
+**Remaining validation for this milestone:**
+1. Obtain, or design and gain approval for, a real engagement or
+   cognitive-load label instrument, then record labels with documented
+   provenance.
+2. Run the capture, rPPG, and aggregation layers on real sessions so the
+   fused modalities carry real measurements.
+3. Re-run `fusion-train --mode scientific` and
+   `personalization-train --mode scientific` on that data and report the
+   metrics with full provenance.
+4. Only then compare fusion strategies, or a population baseline against a
+   personalized one, for any scientific purpose.
 
 ### Milestone 7: Uncertainty-Aware Inference
 

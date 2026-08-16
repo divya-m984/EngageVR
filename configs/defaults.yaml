@@ -203,3 +203,127 @@ training:
   permutation_repeats: 5
   run_ablations: true
   tune_hyperparameters: false          # bounded small grid when true
+
+# --- Milestone 6: multimodal fusion ---
+# Fusion combines evidence from several measurement modalities. It does not
+# make an estimate valid: no fused output has been evaluated against a real
+# participant label, and no strategy below is a champion.
+
+fusion:
+  # early        - concatenate modality features, fit one estimator
+  # uniform_late - one estimator per modality, equal-weight combination
+  # quality_late - one estimator per modality, quality-weighted combination
+  # validation_weighted_late / stacked_late are available but off by default
+  enabled_strategies:
+    - early
+    - uniform_late
+    - quality_late
+
+  # Measurement modalities only. 'quality' is NOT a modality: capture-quality
+  # diagnostics, availability flags, and missingness indicators are support
+  # signals that explain a measurement rather than being one. Naming 'quality'
+  # here is rejected at configuration load.
+  modalities:
+    - behavioural
+    - head_pose
+    - rppg
+    - task
+
+  minimum_modalities: 1          # fewest contributing experts before fusing
+  expert_model_classification: "logistic_regression"
+  expert_model_regression: "ridge"
+  use_calibrated_experts: true
+
+  # Off by default: quality's declared role is fusion weighting, and letting
+  # it into every estimator silently would blur that boundary.
+  include_modality_quality_in_experts: false
+  include_modality_quality_in_early_fusion: false
+
+  quality:
+    enabled: true
+    # exclude | documented_fallback. Neither treats missing quality as
+    # perfect quality; there is no policy that does.
+    missing_quality_policy: "documented_fallback"
+    # Neutral midpoint of the [0, 1] quality range, recorded on every weight
+    # it is used for. Some modalities have no quality channel at all: task
+    # telemetry is a software measurement with no signal-quality index.
+    missing_quality_fallback: 0.5
+    # 0.0 excludes nothing. No empirically validated quality cut-off exists
+    # for these signals, so no non-zero default could be justified.
+    minimum_quality: 0.0
+    # A numerical guard against normalising by ~0, not a modelling threshold.
+    minimum_effective_weight: 1.0e-9
+    # Empty = deterministic equal base weight of 1.0 per modality (the
+    # control). No optimised weight set is shipped as a default.
+    base_weights: {}
+
+  stacking:
+    enabled: false
+    inner_folds: 3                 # grouped, inside the outer training portion
+    meta_model_classification: "logistic_regression"
+    meta_model_regression: "ridge"
+
+  robustness:
+    enabled: true
+    scenarios: []                  # empty = every defined scenario
+    # Synthetic dropout fabricates an availability pattern no measurement
+    # produced. It is a software check and is refused in scientific mode.
+    synthetic_dropout_enabled: false
+    synthetic_dropout_seed: 42
+    synthetic_dropout_probability: 0.0
+
+# --- Milestone 6: personalization (population vs personalized reporting) ---
+#
+# Personalization adapts the POPULATION model to one subject using only that
+# subject's own EARLIER windows. It is not uncertainty calibration, it is not
+# a confidence estimate, and nothing here abstains: confidence thresholds and
+# selective prediction are Milestone 7.
+#
+# Every minimum below is an engineering default, not a validated threshold.
+# Below any of them the subject falls back to the population model and the
+# run records a cold start with a reason.
+personalization:
+  # population_only | personal_baseline | few_shot_correction |
+  # personal_baseline_and_correction.
+  # 'cold_start' is an OUTCOME, not a method: request cold-start behaviour
+  # with calibration_windows: 0.
+  method: "personal_baseline_and_correction"
+
+  # Measurement modalities feeding the fused population model. 'quality' is
+  # not a modality here either.
+  modalities:
+    - behavioural
+    - head_pose
+    - rppg
+    - task
+
+  # A held-out subject's earliest windows reserved for personal calibration.
+  # The evaluation region is everything that starts at or after the latest
+  # calibration window's end; a window straddling that boundary is excluded
+  # from both regions rather than moved.
+  calibration_windows: 5
+
+  minimum_calibration_windows: 3   # fewest labelled windows for a correction
+  minimum_evaluation_windows: 1    # fewest windows after the boundary
+  minimum_calibration_classes: 2   # fewest classes before a probability shift
+  minimum_baseline_samples: 3      # fewest finite values before z-scoring one
+
+  # Standard deviation at or below which a feature is centred but not scaled.
+  # A numerical guard against dividing by ~0, not a modelling threshold.
+  zero_variance_epsilon: 1.0e-9
+
+  # Laplace smoothing applied identically to the observed class counts and to
+  # the population model's expected counts, so the shift is exactly zero when
+  # they agree.
+  classification_smoothing: 1.0
+  # Shrinkage constant kappa in lambda = n / (n + kappa): larger values trust
+  # a small calibration set less.
+  classification_shrinkage_constant: 5.0
+
+  population_model_classification: "logistic_regression"
+  population_model_regression: "ridge"
+  use_calibrated_population_model: true
+
+  # Off by default: signal quality describes the measurement, and it is never
+  # normalised against a personal baseline as a physiological value.
+  include_modality_quality: false

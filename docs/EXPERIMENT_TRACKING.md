@@ -188,3 +188,117 @@ python -c "from pathlib import Path; from engagevr.training.artifacts import ver
 ```
 
 None of these loads a model file.
+
+## Milestone 6: the fusion run directory
+
+The format above is **extended, not replaced**. A fusion run writes every
+document listed there and adds:
+
+```
+fusion_config.json          fusion configuration, resolved columns, scenarios
+experts.json                per-fold modality-expert records and refusals
+fusion_metrics.json         per-strategy folds, aggregates, diagnostics
+robustness.json             every missing-modality scenario per strategy
+expert_predictions.parquet  per-modality expert outputs (reference scenario)
+fusion_weights.parquet      per-modality weights, raw and normalised
+```
+
+`metrics.json` is the same `MetricsDocument`, with one `ModelResult` per
+fusion strategy (`model_kind: "fusion"`) and one per unimodal expert
+(`model_kind: "unimodal_expert"`), so the metric machinery is reused rather
+than duplicated.
+
+`ExperimentRun` gained an optional `required_artifacts` parameter. A fusion
+run declares a **larger** required set — `fusion_config.json`,
+`experts.json`, `fusion_metrics.json`, and `robustness.json` in addition to
+the Milestone 5 four — and a manifest claiming completion with any of them
+missing is refused. The Milestone 5 default is unchanged.
+
+`expert_predictions.parquet` is written for the reference scenario only. A
+missing-modality scenario does not change what an expert computed; it
+changes which experts were allowed to contribute, and that is recorded in
+`fusion_weights.parquet` for every scenario.
+
+### Fusion run identity
+
+```
+<target>-fusion-<selfcheck|sci>-<sha256(...)[:12]>
+```
+
+The hash covers the dataset fingerprint, the target, the task type, the
+seed, the **split-manifest fingerprint**, the enabled strategies, the
+modality groups, the minimum-modality count, the expert model types, the
+calibration setting, the quality-weighting configuration, the stacking
+configuration, the robustness configuration, the scenarios, and the
+EngageVR version. No wall clock and no random component participates, and
+the identifier is insensitive to the order in which strategies, modalities,
+or scenarios were requested.
+
+`split_manifest_fingerprint` is a SHA-256 over the canonical rendering of
+the split manifest, which carries no wall clock. Pinning it in the run
+identity is what makes "these strategies were compared on exactly the same
+folds" checkable after the fact.
+
+## Milestone 6: the personalization run directory
+
+Also the format above, extended. A personalization run writes:
+
+```
+personalization_config.json  resolved configuration, every equation, run-id inputs
+personalization.json         per-fold splits, corrections, both metric sets, coverage
+personal_baselines.json      held-out subjects' per-feature baselines
+```
+
+plus `dataset.json`, `feature_catalog.json`, `splits.json`,
+`calibration.json`, `metrics.json`, `predictions.parquet`,
+`checksums.json`, and `manifest.json`. The seven documents through
+`metrics.json` are its declared **required artifact set**, so a manifest
+claiming completion without one of them is refused.
+
+`metrics.json` is again the same `MetricsDocument`, with exactly two
+`ModelResult` entries over identical evaluation windows:
+
+| Pointer | `model_name` | `model_kind` |
+|---|---|---|
+| `/results/0` | `population` | `population` |
+| `/results/1` | `personalized` | `personalized` |
+
+`predictions.parquet` carries **both** predictions per window side by side
+— `population_predicted_*` and `personalized_predicted_*`, with a
+probability column per class for each — together with
+`personalization_applied`, `cold_start`, `cold_start_reason`,
+`baseline_normalized`, `supervised_correction_applied`,
+`normalized_feature_count`, `calibration_sample_count`, and the
+`calibration_window_ids` list. The population prediction is never
+overwritten, so the difference between the two is computable from the
+artifact without re-running anything.
+
+`personal_baselines.json` records, per held-out subject per fold per
+feature: the column, the catalogue feature name, its modality, its unit,
+the calibration and finite sample counts, `mu_s`, `sigma_s`, the scale
+source, whether it was normalised (and if not, why), and the exact source
+window ids. Training subjects' baselines are not persisted — they have no
+calibration/evaluation boundary to audit.
+
+The audit trail for the leakage claim lives in `personalization.json`:
+every split's calibration and evaluation window ids with both boundary
+timestamps, and every correction's `calibration_targets` mapping window id
+to the label used. A test asserts that mapping never names an evaluation
+window.
+
+### Personalization run identity
+
+```
+<target>-personalization-<selfcheck|sci>-<sha256(...)[:12]>
+```
+
+The hash covers the dataset fingerprint, the target, the task type, the
+seed, the split-manifest fingerprint, the personalization method, the
+modality groups, the calibration-window count, every minimum-evidence
+constant, the zero-variance epsilon, the smoothing and shrinkage
+constants, the population model types, the probability-calibration
+setting, and the EngageVR version. No wall clock and no random component
+participates.
+
+Still no MLflow, no DVC, and no Docker. Tests assert that none appears in a
+fusion or a personalization run directory.

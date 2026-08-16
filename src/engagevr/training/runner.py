@@ -792,6 +792,22 @@ def _interpretation(
     return records
 
 
+def linear_interpretation_records(
+    model_spec: ModelSpec,
+    estimator: Any,
+    fold_index: int,
+    warning: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fold-level linear-coefficient records for a fitted pipeline.
+
+    Exposed so the Milestone 6 fusion runner can record the same
+    interpretation data for its early-fusion model and its linear modality
+    experts without duplicating the extraction logic.  Coefficients are read
+    from the fitted estimator only; nothing is refitted.
+    """
+    return _linear_records(model_spec, estimator, fold_index, warning)
+
+
 def _chance_level_warning(metrics: Any, classification: bool) -> str | None:
     if classification:
         support = getattr(metrics, "class_support", {})
@@ -1151,5 +1167,6 @@ __all__ = [
     "ScientificModeError",
     "assert_scientific_eligibility",
     "imputation_snapshot",
+    "linear_interpretation_records",
     "run_baselines",
 ]

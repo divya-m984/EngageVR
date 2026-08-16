@@ -328,7 +328,13 @@ class ModelResult(BaseModel):
     model_config = {"extra": "forbid"}
 
     model_name: str
-    model_kind: str = Field(description="'dummy', 'linear', 'tree', or 'rule'.")
+    model_kind: str = Field(
+        description=(
+            "'dummy', 'linear', 'tree', or 'rule' for a baseline; 'fusion' or "
+            "'unimodal_expert' for a Milestone 6 fusion result; 'population' "
+            "or 'personalized' for a Milestone 6 personalization result."
+        )
+    )
     is_software_check_baseline: bool = False
     parameters: dict[str, object] = Field(default_factory=dict)
     predictor_columns: tuple[str, ...] = ()

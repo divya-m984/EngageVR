@@ -16,8 +16,29 @@ from engagevr.features.synthetic import (
     generate_synthetic_dataset,
 )
 from engagevr.schemas.features import FeatureWindow
+from engagevr.schemas.fusion import (
+    FusionConfiguration,
+    FusionModality,
+    FusionStrategy,
+    RobustnessConfiguration,
+    StackingConfiguration,
+)
+from engagevr.schemas.personalization import (
+    PersonalizationConfiguration,
+    PersonalizationMethod,
+)
 from engagevr.schemas.session import DataSource, ExperimentCondition, Session
 from engagevr.schemas.targets import TargetName
+from engagevr.training.fusion_runner import (
+    FusionRunConfiguration,
+    FusionRunResult,
+    run_fusion,
+)
+from engagevr.training.personalization_runner import (
+    PersonalizationRunConfiguration,
+    PersonalizationRunResult,
+    run_personalization,
+)
 
 
 @pytest.fixture
@@ -104,3 +125,129 @@ def m5_dataset(
         random_seed=m5_synthetic_config.seed,
     )
     return path
+
+
+# ---------------------------------------------------------------------------
+# Milestone 6: multimodal fusion
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def m6_fusion_configuration() -> FusionConfiguration:
+    """The three default fusion strategies over the four modality groups."""
+    return FusionConfiguration(
+        strategies=(
+            FusionStrategy.EARLY,
+            FusionStrategy.UNIFORM_LATE,
+            FusionStrategy.QUALITY_LATE,
+        ),
+        modalities=tuple(FusionModality),
+    )
+
+
+@pytest.fixture(scope="session")
+def m6_classification_run(
+    tmp_path_factory: pytest.TempPathFactory,
+    m5_dataset: Path,
+    m6_fusion_configuration: FusionConfiguration,
+) -> FusionRunResult:
+    """A completed SYNTHETIC classification fusion run, shared across tests."""
+    directory = tmp_path_factory.mktemp("m6-classification")
+    return run_fusion(
+        FusionRunConfiguration(
+            dataset_path=m5_dataset,
+            target_name=TargetName.ENGAGEMENT_CLASS,
+            output_directory=directory,
+            fusion=m6_fusion_configuration,
+            n_splits=3,
+        )
+    )
+
+
+@pytest.fixture(scope="session")
+def m6_regression_run(
+    tmp_path_factory: pytest.TempPathFactory,
+    m5_dataset: Path,
+) -> FusionRunResult:
+    """A completed SYNTHETIC regression fusion run, reference scenario only."""
+    directory = tmp_path_factory.mktemp("m6-regression")
+    configuration = FusionConfiguration(
+        strategies=(
+            FusionStrategy.EARLY,
+            FusionStrategy.UNIFORM_LATE,
+            FusionStrategy.QUALITY_LATE,
+            FusionStrategy.VALIDATION_WEIGHTED_LATE,
+            FusionStrategy.STACKED_LATE,
+        ),
+        modalities=tuple(FusionModality),
+        stacking=StackingConfiguration(enabled=True),
+        robustness=RobustnessConfiguration(enabled=False),
+    )
+    return run_fusion(
+        FusionRunConfiguration(
+            dataset_path=m5_dataset,
+            target_name=TargetName.ENGAGEMENT_SCORE,
+            output_directory=directory,
+            fusion=configuration,
+            n_splits=3,
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Milestone 6: personalization
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def m6_personalization_configuration() -> PersonalizationConfiguration:
+    """Personal baseline plus supervised correction over all four modalities.
+
+    Two calibration windows out of each subject's ten, so every subject in
+    the shared fixture dataset can be split into a calibration region and a
+    strictly later evaluation region.
+    """
+    return PersonalizationConfiguration(
+        method=PersonalizationMethod.PERSONAL_BASELINE_AND_CORRECTION,
+        modalities=tuple(FusionModality),
+        calibration_windows=3,
+        minimum_calibration_windows=2,
+    )
+
+
+@pytest.fixture(scope="session")
+def m6_personalization_classification_run(
+    tmp_path_factory: pytest.TempPathFactory,
+    m5_dataset: Path,
+    m6_personalization_configuration: PersonalizationConfiguration,
+) -> PersonalizationRunResult:
+    """A completed SYNTHETIC classification personalization run."""
+    directory = tmp_path_factory.mktemp("m6-personalization-classification")
+    return run_personalization(
+        PersonalizationRunConfiguration(
+            dataset_path=m5_dataset,
+            target_name=TargetName.ENGAGEMENT_CLASS,
+            output_directory=directory,
+            personalization=m6_personalization_configuration,
+            n_splits=3,
+        )
+    )
+
+
+@pytest.fixture(scope="session")
+def m6_personalization_regression_run(
+    tmp_path_factory: pytest.TempPathFactory,
+    m5_dataset: Path,
+    m6_personalization_configuration: PersonalizationConfiguration,
+) -> PersonalizationRunResult:
+    """A completed SYNTHETIC regression personalization run."""
+    directory = tmp_path_factory.mktemp("m6-personalization-regression")
+    return run_personalization(
+        PersonalizationRunConfiguration(
+            dataset_path=m5_dataset,
+            target_name=TargetName.ENGAGEMENT_SCORE,
+            output_directory=directory,
+            personalization=m6_personalization_configuration,
+            n_splits=3,
+        )
+    )
