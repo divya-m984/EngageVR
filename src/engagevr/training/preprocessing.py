@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import enum
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +91,10 @@ class ModellingFrame:
         target_source_types: tuple[str, ...],
         target_scientific_permitted: tuple[bool, ...],
         metadata: DatasetMetadata,
+        window_start_utc: tuple[datetime | None, ...] = (),
+        window_end_utc: tuple[datetime | None, ...] = (),
+        window_indices: tuple[int, ...] = (),
+        windows_overlap: bool = False,
     ) -> None:
         self.predictors = predictors
         self.target_values = target_values
@@ -102,6 +107,16 @@ class ModellingFrame:
         self.target_source_types = target_source_types
         self.target_scientific_permitted = target_scientific_permitted
         self.metadata = metadata
+        # Window timing is carried alongside the predictors rather than in
+        # them: it is provenance, never an input. Milestone 6
+        # personalization needs it to order a subject's windows in time and
+        # to prove that a calibration window ends before an evaluation
+        # window begins. It is optional so that an in-memory frame built for
+        # a unit test does not have to fabricate timestamps.
+        self.window_start_utc = window_start_utc
+        self.window_end_utc = window_end_utc
+        self.window_indices = window_indices
+        self.windows_overlap = windows_overlap
 
     @property
     def row_count(self) -> int:
@@ -246,7 +261,33 @@ def load_modelling_frame(
         target_source_types=sources,
         target_scientific_permitted=permitted,
         metadata=metadata,
+        window_start_utc=_timestamps(labelled, "window_start_utc"),
+        window_end_utc=_timestamps(labelled, "window_end_utc"),
+        window_indices=(
+            tuple(int(v) for v in labelled["window_index"])
+            if "window_index" in labelled.columns
+            else tuple(range(len(labelled)))
+        ),
+        windows_overlap=(
+            bool(labelled["windows_overlap"].any())
+            if "windows_overlap" in labelled.columns
+            else False
+        ),
     )
+
+
+def _timestamps(frame: pd.DataFrame, column: str) -> tuple[datetime | None, ...]:
+    """Window timestamps as timezone-aware datetimes, or ``None`` per row.
+
+    A row whose timestamp is absent or unparseable yields ``None`` rather
+    than a substituted value: a fabricated time would silently reorder a
+    subject's windows, which is exactly what the personalization split must
+    not do.
+    """
+    if column not in frame.columns:
+        return tuple(None for _ in range(len(frame)))
+    parsed = pd.to_datetime(frame[column], errors="coerce", utc=True)
+    return tuple(None if pd.isna(value) else value.to_pydatetime() for value in parsed)
 
 
 def _feature_of(column: str) -> str | None:

@@ -11,6 +11,14 @@ Documented formulas
   which the quantity is *defined*.  A class with no predicted instances
   has undefined precision; it is excluded from the mean rather than
   counted as zero, and its exclusion is recorded.
+- **Balanced accuracy** — the unweighted mean of recall over the classes
+  that are *present in the true labels*.  It is computed from the same
+  per-class recall vector as macro recall rather than through
+  ``balanced_accuracy_score``, which derives it from an unlabelled
+  confusion matrix and warns whenever the predictions name a class the
+  truth does not contain.  The two definitions agree exactly; deriving it
+  here keeps a misleading warning out of the run log while a heavy
+  missing-modality scenario is being evaluated.
 - **Multiclass Brier score** — ``mean_i || p_i - onehot(y_i) ||^2``, the
   mean squared Euclidean distance between the predicted probability
   vector and the one-hot true vector.  Range ``[0, 2]``.  The alternative
@@ -35,7 +43,6 @@ from collections.abc import Sequence
 import numpy as np
 from sklearn.metrics import (
     accuracy_score,
-    balanced_accuracy_score,
     confusion_matrix,
     f1_score,
     log_loss,
@@ -129,13 +136,6 @@ def classification_metrics(
     predicted = list(y_predicted)
     accuracy = float(accuracy_score(truth, predicted))
 
-    present = [label for label in labels if support[label] > 0]
-    if present:
-        balanced = float(balanced_accuracy_score(truth, predicted))
-    else:  # pragma: no cover - unreachable while n > 0
-        balanced = None
-        unavailable["balanced_accuracy"] = "no class is present in the true labels"
-
     precision, recall, f1, _support = precision_recall_fscore_support(
         truth,
         predicted,
@@ -143,6 +143,24 @@ def classification_metrics(
         average=None,
         zero_division=np.nan,
     )
+
+    # Balanced accuracy is, by definition, the macro mean of recall over the
+    # classes present in ``y_true``. ``balanced_accuracy_score`` computes it
+    # from an unlabelled confusion matrix, so when ``y_pred`` names a class
+    # that ``y_true`` does not contain — which a heavy missing-modality
+    # scenario routinely produces — that class becomes an all-zero row, and
+    # scikit-learn emits "y_pred contains classes not in y_true" before
+    # dropping it. The recall vector above already carries exactly the same
+    # per-class values (``zero_division=np.nan`` marks the absent classes),
+    # so taking the mean over the defined entries reproduces the metric
+    # exactly and leaves no misleading warning in the run log.
+    balanced, _undefined_recall_for_balanced = _macro(recall, labels)
+    if balanced is None:  # pragma: no cover - unreachable while n > 0
+        unavailable["balanced_accuracy"] = (
+            "balanced accuracy is the mean recall over the classes present in "
+            "the true labels, and no class is present"
+        )
+
     per_class = tuple(
         PerClassMetrics(
             label=label,

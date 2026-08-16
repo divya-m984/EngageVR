@@ -7,8 +7,11 @@ never stand in for "not computable".
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
+from sklearn.metrics import balanced_accuracy_score
 
 from engagevr.schemas.experiments import (
     SELF_CHECK_DISCLAIMER,
@@ -127,6 +130,69 @@ class TestClassificationMetrics:
             metrics.unavailable_metrics["accuracy"]
             == "no samples in this evaluation set"
         )
+
+
+class TestBalancedAccuracy:
+    """Balanced accuracy is the mean recall over classes present in the truth.
+
+    A heavy missing-modality scenario routinely leaves a class predicted
+    that the surviving truth does not contain.  ``balanced_accuracy_score``
+    warns in exactly that case; this pipeline computes the same quantity
+    from its own recall vector, so the number is identical and the warning
+    does not appear in a run log.
+    """
+
+    def test_a_class_predicted_but_absent_from_the_truth_emits_no_warning(
+        self,
+    ) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            metrics = classification_metrics(
+                y_true=["low", "low", "medium", "medium"],
+                y_predicted=["low", "high", "medium", "high"],
+                labels=CLASSES,
+                group_ids=["a", "a", "b", "b"],
+            )
+        assert metrics.balanced_accuracy is not None
+
+    def test_the_value_matches_the_scikit_learn_definition(self) -> None:
+        truth = ["low", "low", "medium", "medium", "high"]
+        predicted = ["low", "high", "medium", "low", "high"]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            expected = float(balanced_accuracy_score(truth, predicted))
+        metrics = classification_metrics(
+            y_true=truth,
+            y_predicted=predicted,
+            labels=CLASSES,
+            group_ids=["a"] * 5,
+        )
+        assert metrics.balanced_accuracy == pytest.approx(expected)
+
+    def test_it_agrees_with_scikit_learn_when_a_class_is_absent(self) -> None:
+        """The heavy-dropout condition: 'high' never appears in the truth."""
+        truth = ["low", "low", "medium", "medium"]
+        predicted = ["low", "high", "medium", "high"]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            expected = float(balanced_accuracy_score(truth, predicted))
+        metrics = classification_metrics(
+            y_true=truth,
+            y_predicted=predicted,
+            labels=CLASSES,
+            group_ids=["a"] * 4,
+        )
+        assert metrics.balanced_accuracy == pytest.approx(expected)
+        assert metrics.class_support["high"] == 0
+
+    def test_it_equals_macro_recall_by_construction(self) -> None:
+        metrics = classification_metrics(
+            y_true=["low", "low", "medium", "high"],
+            y_predicted=["low", "medium", "medium", "low"],
+            labels=CLASSES,
+            group_ids=["a"] * 4,
+        )
+        assert metrics.balanced_accuracy == pytest.approx(metrics.macro_recall)
 
 
 class TestRegressionMetrics:

@@ -213,9 +213,9 @@ Staged modelling pipeline from deterministic demo through uncertainty-aware fusi
 |-------|-----------|-------------|--------|
 | A: Demo | `inference/demo.py` | Deterministic synthetic predictions | Deferred |
 | B: Baselines | `training/` (below) | Grouped CV over interpretable classical models | Implemented (M5) |
-| C: Fusion | `training/fusion.py` | Early/late fusion, modality masks, quality weights | **Deferred** (M6) |
+| C: Fusion | `training/fusion*.py`, `experts.py`, `stacking.py`, `robustness.py` | Early / late / quality-aware / stacked fusion, modality availability, quality weights | Implemented (M6) |
 | D: Temporal | `training/temporal.py` | LSTM/GRU/TCN | **Deferred** (DEC-005) |
-| E: Personal | `personalization/calibration.py` | Per-user baseline, z-score, few-shot, cold-start | **Deferred** (M6) |
+| E: Personal | `training/personalization*.py` | Per-user baseline, z-score, few-shot, cold-start, separate population reporting | Implemented (M6) |
 | F: Uncertainty | `uncertainty/calibration.py` | Abstention, conformal, ensemble disagreement | **Deferred** (M7) |
 
 #### Milestone 5 modules (`src/engagevr/training/`)
@@ -233,11 +233,34 @@ Staged modelling pipeline from deterministic demo through uncertainty-aware fusi
 | `cli_milestone5.py` | `features-demo` / `baseline-demo` / `baseline-train` |
 
 The baseline registry uses scikit-learn's histogram gradient boosting
-rather than XGBoost (DEC-037). No fusion architecture, temporal model,
-personalisation, or abstention policy exists in this layer yet.
+rather than XGBoost (DEC-037).
 
-See `docs/BASELINE_MODELS.md`, `docs/MODEL_EVALUATION.md`, and
-`docs/EXPERIMENT_TRACKING.md`.
+#### Milestone 6 modules (`src/engagevr/training/`)
+
+| Module | Responsibility |
+|--------|---------------|
+| `training/fusion.py` | Modality columns, weight algebra, probability and regression combination, disagreement helpers (DEC-049, DEC-050, DEC-051) |
+| `training/experts.py` | One estimator per modality, fitted only on windows that modality observed; refusal with a reason (DEC-052) |
+| `training/stacking.py` | Grouped out-of-fold construction and the independent leakage assertion (DEC-054) |
+| `training/robustness.py` | Ten missing-modality scenarios and deterministic synthetic dropout (DEC-055) |
+| `training/fusion_metrics.py` | Coverage, contribution counts, mean weights, disagreement summaries (DEC-056) |
+| `training/fusion_artifacts.py` | Deterministic run identity, split-manifest fingerprint, fusion Parquet tables (DEC-058) |
+| `training/fusion_runner.py` | Fold orchestration, strategy evaluation, artifact assembly |
+| `schemas/personalization.py` | Personalization records; a cold start must reproduce the population prediction (DEC-063) |
+| `training/personalization.py` | Chronological calibration/evaluation split, personal baselines, corrections (DEC-061, DEC-062) |
+| `training/personalization_runner.py` | Population reference model, per-subject adaptation, separate reporting (DEC-060, DEC-064) |
+| `cli_milestone6.py` | `fusion-demo` / `fusion-train` (DEC-059), `personalization-demo` / `personalization-train` |
+
+The fusion layer reuses the Milestone 5 splitter, preprocessing,
+calibration, and metric machinery unchanged; the split manifest is built
+once and fingerprinted so that "the same folds" is checkable. The
+personalization layer sits on top of the early-fusion population
+prediction rather than beside it, and never retunes a fusion weight. No
+temporal model and no abstention policy exists in either, and no deep or
+neural fusion is implemented.
+
+See `docs/BASELINE_MODELS.md`, `docs/MODEL_EVALUATION.md`,
+`docs/EXPERIMENT_TRACKING.md`, and `docs/MULTIMODAL_FUSION.md`.
 
 ### 6. Adaptation Policy Layer (`src/engagevr/adaptation/`)
 

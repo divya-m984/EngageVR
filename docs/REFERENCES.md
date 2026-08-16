@@ -414,3 +414,63 @@ add a dependency to explain models that have not been evaluated against
 any real label. Coefficients and permutation importance answer the
 question this milestone actually has: which inputs did a model lean on in
 held-out folds.
+
+## Milestone 6: multimodal fusion
+
+No published fusion algorithm is reimplemented in this milestone. The
+strategies here are textbook combination rules, implemented directly and
+documented in full in `docs/MULTIMODAL_FUSION.md`:
+
+| Strategy | What it is |
+|---|---|
+| early feature fusion | concatenation of modality feature blocks before one estimator is fitted |
+| uniform late fusion | unweighted mean of the available experts' outputs |
+| quality-aware late fusion | weighted mean, weights from availability and recorded signal quality, per the equation in `docs/MULTIMODAL_FUSION.md` |
+| validation-derived late fusion | weighted mean, weights from bounded skill scores computed on inner validation groups |
+| stacked fusion | an interpretable meta-estimator fitted on out-of-fold expert predictions |
+
+The stacking design follows the standard leakage-safe construction: a
+meta-learner is fitted on predictions generated for held-out inner folds,
+never on in-sample predictions. `assert_out_of_fold` enforces the property
+independently rather than trusting the construction.
+
+Every scikit-learn estimator used — `LogisticRegression`, `Ridge`,
+`StratifiedGroupKFold`, `GroupKFold`, `CalibratedClassifierCV`,
+`FrozenEstimator`, `SimpleImputer`, `StandardScaler`, `ColumnTransformer`,
+`Pipeline` — was verified against the installed scikit-learn 1.9.0. No new
+dependency was added for this milestone.
+
+**No claim is made that any of these strategies is superior on real data.**
+Nothing here has been evaluated against a real participant label.
+
+### Personalization
+
+No published personalization algorithm is reimplemented either. Both
+corrections are elementary and are stated in full in
+`docs/MULTIMODAL_FUSION.md` and on the persisted records themselves.
+
+| Component | What it is |
+|---|---|
+| personal-baseline normalization | the standard score `z = (x - mu) / sigma`, with the statistics restricted to one subject's earlier windows |
+| few-shot regression correction | a per-subject additive bias, `b_s = mean(y_calibration - y_population_prediction)` |
+| few-shot classification correction | a Laplace-smoothed, shrunk per-subject log-odds shift applied to the population probabilities and renormalised |
+
+The classification correction is a prior-shift adjustment: it moves the
+population probabilities toward the class frequencies the subject actually
+exhibited during calibration. Smoothing both the observed and the expected
+term identically gives the property the design depends on — the shift is
+exactly zero when they agree — and the shrinkage factor `n / (n + kappa)`
+is the usual way of trusting a small sample less. Neither `kappa = 5.0` nor
+`alpha = 1.0` is taken from a published result; both are engineering
+defaults, stated as such, and untuned.
+
+The leave-subject-out protocol with a within-subject chronological
+calibration/evaluation boundary is the standard construction for
+personalization evaluation. What is enforced here beyond the usual is that
+the boundary is in wall-clock time rather than row position, so overlapping
+windows cannot straddle it unnoticed.
+
+`docs/RESEARCH_QUESTIONS.md` RQ2 asks whether personalized baselines
+outperform population models. **Nothing in this milestone answers it.** No
+personalized model here has been fitted to a real participant label, and a
+synthetic self-check cannot support a claim in either direction.

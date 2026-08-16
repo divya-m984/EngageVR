@@ -6,6 +6,7 @@ supplied path) and validates it against typed Pydantic models.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from typing import Self
 
@@ -17,6 +18,20 @@ from engagevr.protocol.version import (
     PROTOCOL_VERSION,
     ProtocolVersionError,
     parse_protocol_version,
+)
+from engagevr.schemas.fusion import (
+    FusionConfiguration,
+    FusionModality,
+    FusionStrategy,
+    MissingQualityPolicy,
+    QualityWeightingConfiguration,
+    RobustnessConfiguration,
+    StackingConfiguration,
+)
+from engagevr.schemas.personalization import (
+    REQUESTABLE_METHODS,
+    PersonalizationConfiguration,
+    PersonalizationMethod,
 )
 from engagevr.schemas.rppg import RoiRegion, RppgMethod
 
@@ -714,6 +729,350 @@ class TrainingConfig(BaseModel):
         return self
 
 
+# --- Milestone 6: multimodal fusion ---
+
+
+class FusionQualitySettings(BaseModel):
+    """Quality-aware weighting settings, validated at configuration load."""
+
+    enabled: bool = True
+    missing_quality_policy: str = "documented_fallback"
+    missing_quality_fallback: float = Field(default=0.5, ge=0.0, le=1.0)
+    minimum_quality: float = Field(default=0.0, ge=0.0, le=1.0)
+    minimum_effective_weight: float = Field(default=1e-9, ge=0.0, lt=1.0)
+    base_weights: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        allowed = {policy.value for policy in MissingQualityPolicy}
+        if self.missing_quality_policy not in allowed:
+            raise ValueError(
+                "fusion.quality.missing_quality_policy must be one of "
+                f"{sorted(allowed)}; got {self.missing_quality_policy!r}. "
+                "There is no policy that treats missing quality as perfect "
+                "quality."
+            )
+        for name, weight in self.base_weights.items():
+            if name not in {m.value for m in FusionModality}:
+                raise ValueError(
+                    f"fusion.quality.base_weights names {name!r}, which is not "
+                    f"a fusion modality; valid: "
+                    f"{sorted(m.value for m in FusionModality)}. Quality is a "
+                    "support signal, not a modality."
+                )
+            if weight <= 0.0:
+                raise ValueError(
+                    f"fusion.quality.base_weights[{name!r}] must be positive; "
+                    f"got {weight!r}"
+                )
+        return self
+
+    def resolve(self) -> QualityWeightingConfiguration:
+        """Build the typed quality-weighting configuration."""
+        return QualityWeightingConfiguration(
+            enabled=self.enabled,
+            missing_quality_policy=MissingQualityPolicy(self.missing_quality_policy),
+            missing_quality_fallback=self.missing_quality_fallback,
+            minimum_quality=self.minimum_quality,
+            minimum_effective_weight=self.minimum_effective_weight,
+            base_weights=dict(self.base_weights),
+        )
+
+
+class FusionStackingSettings(BaseModel):
+    """Stacked-fusion settings. Disabled by default."""
+
+    enabled: bool = False
+    inner_folds: int = Field(default=3, ge=2)
+    meta_model_classification: str = "logistic_regression"
+    meta_model_regression: str = "ridge"
+
+    def resolve(self) -> StackingConfiguration:
+        """Build the typed stacking configuration."""
+        return StackingConfiguration(
+            enabled=self.enabled,
+            inner_folds=self.inner_folds,
+            meta_model_classification=self.meta_model_classification,
+            meta_model_regression=self.meta_model_regression,
+        )
+
+
+class FusionRobustnessSettings(BaseModel):
+    """Missing-modality robustness settings."""
+
+    enabled: bool = True
+    scenarios: list[str] = Field(default_factory=list)
+    synthetic_dropout_enabled: bool = False
+    synthetic_dropout_seed: int = 42
+    synthetic_dropout_probability: float = Field(default=0.0, ge=0.0, lt=1.0)
+
+    def resolve(self) -> RobustnessConfiguration:
+        """Build the typed robustness configuration."""
+        return RobustnessConfiguration(
+            enabled=self.enabled,
+            scenarios=tuple(self.scenarios),
+            synthetic_dropout_enabled=self.synthetic_dropout_enabled,
+            synthetic_dropout_seed=self.synthetic_dropout_seed,
+            synthetic_dropout_probability=self.synthetic_dropout_probability,
+        )
+
+
+class PersonalizationConfig(BaseModel):
+    """Personalization defaults (Milestone 6, acceptance criterion 3).
+
+    Every minimum-evidence threshold here is an engineering default, not a
+    validated value.  Below any of them the run falls back to the population
+    model and records a cold start with a reason; it never weakens the
+    protocol to keep a subject in the personalized report.
+    """
+
+    method: str = "personal_baseline_and_correction"
+    modalities: list[str] = Field(
+        default_factory=lambda: ["behavioural", "head_pose", "rppg", "task"]
+    )
+    calibration_windows: int = Field(default=5, ge=0)
+    minimum_calibration_windows: int = Field(default=3, ge=1)
+    minimum_evaluation_windows: int = Field(default=1, ge=1)
+    minimum_calibration_classes: int = Field(default=2, ge=1)
+    minimum_baseline_samples: int = Field(default=3, ge=1)
+    zero_variance_epsilon: float = Field(default=1e-9, gt=0.0, lt=1.0)
+    classification_smoothing: float = Field(default=1.0, gt=0.0)
+    classification_shrinkage_constant: float = Field(default=5.0, gt=0.0)
+    population_model_classification: str = "logistic_regression"
+    population_model_regression: str = "ridge"
+    use_calibrated_population_model: bool = True
+    include_modality_quality: bool = False
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        requestable = sorted(m.value for m in REQUESTABLE_METHODS)
+        normalised = self.method.replace("-", "_")
+        if normalised not in requestable:
+            extra = (
+                " 'cold_start' is an outcome a run records when "
+                "personalization could not be applied, not a method to "
+                "request: ask for it with calibration_windows=0."
+                if normalised == PersonalizationMethod.COLD_START.value
+                else ""
+            )
+            raise ValueError(
+                f"personalization.method names {normalised!r}, which is not a "
+                f"requestable method; valid: {requestable}.{extra}"
+            )
+        if len(set(self.modalities)) != len(self.modalities):
+            raise ValueError("personalization.modalities contains duplicates")
+        valid = {m.value for m in FusionModality}
+        for name in self.modalities:
+            if name not in valid:
+                extra = (
+                    " Quality is a support signal, not a measurement modality."
+                    if name == "quality"
+                    else ""
+                )
+                raise ValueError(
+                    f"personalization.modalities names {name!r}, which is not "
+                    f"a fusion modality; valid: {sorted(valid)}.{extra}"
+                )
+        if len(self.modalities) < 2:
+            raise ValueError(
+                "personalization.modalities must name at least two groups: "
+                "personalization layers on the fused population model"
+            )
+        return self
+
+    def resolve(
+        self,
+        *,
+        method: str | None = None,
+        modalities: Sequence[str] | None = None,
+        calibration_windows: int | None = None,
+        minimum_calibration_windows: int | None = None,
+        minimum_evaluation_windows: int | None = None,
+    ) -> PersonalizationConfiguration:
+        """Build the typed personalization configuration, with overrides.
+
+        Raises
+        ------
+        ValueError
+            If the resulting combination is not a valid configuration.
+        """
+        chosen = (method if method is not None else self.method).replace("-", "_")
+        return PersonalizationConfiguration(
+            method=PersonalizationMethod(chosen),
+            modalities=tuple(
+                FusionModality(name)
+                for name in (modalities if modalities is not None else self.modalities)
+            ),
+            calibration_windows=(
+                self.calibration_windows
+                if calibration_windows is None
+                else calibration_windows
+            ),
+            minimum_calibration_windows=(
+                self.minimum_calibration_windows
+                if minimum_calibration_windows is None
+                else minimum_calibration_windows
+            ),
+            minimum_evaluation_windows=(
+                self.minimum_evaluation_windows
+                if minimum_evaluation_windows is None
+                else minimum_evaluation_windows
+            ),
+            minimum_calibration_classes=self.minimum_calibration_classes,
+            minimum_baseline_samples=self.minimum_baseline_samples,
+            zero_variance_epsilon=self.zero_variance_epsilon,
+            classification_smoothing=self.classification_smoothing,
+            classification_shrinkage_constant=(self.classification_shrinkage_constant),
+            population_model_classification=self.population_model_classification,
+            population_model_regression=self.population_model_regression,
+            use_calibrated_population_model=self.use_calibrated_population_model,
+            include_modality_quality=self.include_modality_quality,
+        )
+
+
+class FusionConfig(BaseModel):
+    """Multimodal-fusion defaults.
+
+    ``quality`` is deliberately absent from ``modalities``: capture-quality
+    diagnostics are support/context signals that may inform explicitly named
+    quality-aware weighting, and naming one here is rejected rather than
+    silently accepted as a fifth measurement modality.
+    """
+
+    enabled_strategies: list[str] = Field(
+        default_factory=lambda: ["early", "uniform_late", "quality_late"]
+    )
+    modalities: list[str] = Field(
+        default_factory=lambda: ["behavioural", "head_pose", "rppg", "task"]
+    )
+    minimum_modalities: int = Field(default=1, ge=1)
+    expert_model_classification: str = "logistic_regression"
+    expert_model_regression: str = "ridge"
+    use_calibrated_experts: bool = True
+    include_modality_quality_in_experts: bool = False
+    include_modality_quality_in_early_fusion: bool = False
+    quality: FusionQualitySettings = Field(default_factory=FusionQualitySettings)
+    stacking: FusionStackingSettings = Field(default_factory=FusionStackingSettings)
+    robustness: FusionRobustnessSettings = Field(
+        default_factory=FusionRobustnessSettings
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if not self.enabled_strategies:
+            raise ValueError(
+                "fusion.enabled_strategies must name at least one strategy; an "
+                "empty set produces no fusion at all"
+            )
+        if len(set(self.enabled_strategies)) != len(self.enabled_strategies):
+            raise ValueError("fusion.enabled_strategies contains duplicates")
+        valid_strategies = {s.value for s in FusionStrategy}
+        for name in self.enabled_strategies:
+            if name.replace("-", "_") not in valid_strategies:
+                raise ValueError(
+                    f"fusion.enabled_strategies names {name!r}, which is not an "
+                    f"implemented strategy; valid: {sorted(valid_strategies)}"
+                )
+        if len(set(self.modalities)) != len(self.modalities):
+            raise ValueError("fusion.modalities contains duplicates")
+        valid_modalities = {m.value for m in FusionModality}
+        for name in self.modalities:
+            if name not in valid_modalities:
+                extra = (
+                    " Quality is a support signal, not a measurement modality."
+                    if name == "quality"
+                    else ""
+                )
+                raise ValueError(
+                    f"fusion.modalities names {name!r}, which is not a fusion "
+                    f"modality; valid: {sorted(valid_modalities)}.{extra}"
+                )
+        if len(self.modalities) < 2:
+            raise ValueError(
+                "fusion.modalities must name at least two groups; with one "
+                "group there is nothing to fuse"
+            )
+        if self.minimum_modalities > len(self.modalities):
+            raise ValueError(
+                f"fusion.minimum_modalities ({self.minimum_modalities}) exceeds "
+                f"the {len(self.modalities)} configured modalities; no window "
+                "could ever satisfy it"
+            )
+        return self
+
+    def resolve(
+        self,
+        *,
+        strategies: Sequence[str] | None = None,
+        modalities: Sequence[str] | None = None,
+        minimum_modalities: int | None = None,
+        use_calibrated_experts: bool | None = None,
+        scenarios: Sequence[str] | None = None,
+        stacking_enabled: bool | None = None,
+        synthetic_dropout_probability: float | None = None,
+        synthetic_dropout_seed: int | None = None,
+    ) -> FusionConfiguration:
+        """Build the typed fusion configuration, with optional overrides.
+
+        Raises
+        ------
+        ValueError
+            If the resulting combination is not a valid fusion configuration.
+        """
+        chosen = [
+            FusionStrategy(name.replace("-", "_"))
+            for name in (
+                strategies if strategies is not None else self.enabled_strategies
+            )
+        ]
+        chosen_modalities = [
+            FusionModality(name)
+            for name in (modalities if modalities is not None else self.modalities)
+        ]
+        stacking = self.stacking.resolve()
+        if stacking_enabled is None:
+            stacking_enabled = FusionStrategy.STACKED_LATE in chosen or stacking.enabled
+        stacking = stacking.model_copy(update={"enabled": bool(stacking_enabled)})
+        robustness = self.robustness.resolve()
+        updates: dict[str, object] = {}
+        if scenarios is not None:
+            updates["scenarios"] = tuple(scenarios)
+        if synthetic_dropout_probability is not None:
+            updates["synthetic_dropout_probability"] = synthetic_dropout_probability
+            updates["synthetic_dropout_enabled"] = synthetic_dropout_probability > 0.0
+        if synthetic_dropout_seed is not None:
+            updates["synthetic_dropout_seed"] = synthetic_dropout_seed
+        if updates:
+            robustness = RobustnessConfiguration(
+                **{**robustness.model_dump(), **updates}
+            )
+        return FusionConfiguration(
+            strategies=tuple(chosen),
+            modalities=tuple(chosen_modalities),
+            minimum_modalities=(
+                self.minimum_modalities
+                if minimum_modalities is None
+                else minimum_modalities
+            ),
+            expert_model_classification=self.expert_model_classification,
+            expert_model_regression=self.expert_model_regression,
+            use_calibrated_experts=(
+                self.use_calibrated_experts
+                if use_calibrated_experts is None
+                else use_calibrated_experts
+            ),
+            include_modality_quality_in_experts=(
+                self.include_modality_quality_in_experts
+            ),
+            include_modality_quality_in_early_fusion=(
+                self.include_modality_quality_in_early_fusion
+            ),
+            quality=self.quality.resolve(),
+            stacking=stacking,
+            robustness=robustness,
+        )
+
+
 # --- Root model ---
 
 
@@ -744,6 +1103,12 @@ class EngageVRConfig(BaseModel):
     # Milestone 5
     features: FeaturesConfig = Field(default_factory=FeaturesConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
+
+    # Milestone 6
+    fusion: FusionConfig = Field(default_factory=FusionConfig)
+    personalization: PersonalizationConfig = Field(
+        default_factory=PersonalizationConfig
+    )
 
     @classmethod
     def from_yaml(cls, path: str | Path | None = None) -> Self:

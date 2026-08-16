@@ -411,18 +411,140 @@ fixtures and against the synthetic generator. Consequently:
   noise.
 - SHAP is not used in this milestone.
 
-### Not implemented in this milestone
+### Not implemented in Milestone 5
 
 Multimodal-fusion architectures, modality masks, quality-aware weighting,
 early-versus-late fusion comparison, temporal neural networks,
 personalisation, online inference, confidence-based abstention, adaptation
 policy, dashboard pages, MLflow, DVC, Docker, and deployment. `all_available`
 in the ablation set means "no feature group was removed"; it is not a
-fusion architecture.
+fusion architecture. Fusion arrived in Milestone 5's successor and is
+described below; the ablation set was **not** renamed.
 
 ### No medical, psychological, or adaptive-effectiveness claim
 
 Nothing in the modelling layer supports a medical, diagnostic, screening,
 monitoring, psychological, or clinical conclusion, and nothing here shows
 that adapting an environment on the basis of these estimates would help
+anyone.
+
+## Multimodal-Fusion Limitations (Milestone 6)
+
+### Scientific status
+
+**Milestone 6 multimodal-fusion implementation complete; scientific
+evaluation on real participant-labelled multimodal data pending.**
+
+Every fusion number this repository has produced came from SYNTHETIC data.
+Which fusion architecture best recovers a latent variable that this
+repository itself inserted is a fact about the generator, not a fact about
+fusion, about engagement, or about any person. No strategy is a champion,
+none is validated, and none is production-ready.
+
+### Fusion does not create validity
+
+Combining four unvalidated measurement channels produces one unvalidated
+estimate. Fusion can improve robustness to a missing channel, and it can
+make the contribution of each channel inspectable. It cannot make an
+engagement or cognitive-load estimate valid, and nothing here shows that it
+does.
+
+### Signal quality is still not a state
+
+Quality-aware fusion weights an expert by how usable its signal was. A low
+weight means the camera or task signal was poor. It is never low
+engagement, never high cognitive load, and never a statement about the
+person. Quality and model probability are kept in separate fields on every
+record precisely so the two cannot be confused.
+
+Modality quality itself has never been validated against anything external.
+The rPPG quality index in particular is an interpretable engineering
+construction with equal component weights and hard gates (DEC-021), not a
+calibrated measure of signal fidelity.
+
+### Missing-modality results are software results
+
+The ten scenarios and the seeded synthetic dropout describe how this code
+behaves when told a modality is absent. No real camera has failed, no real
+rPPG window has been rejected in the field, and no real task telemetry has
+gone missing here. Coverage numbers from those scenarios are not real-world
+robustness results.
+
+Scenarios are applied at evaluation time: the models were trained once on
+the recorded availability. A system trained on a genuinely rPPG-free
+dataset would be a different system, and nothing here measures it.
+
+### Expert disagreement is not uncertainty
+
+Disagreement diagnostics describe ensemble spread. They are not calibrated
+uncertainty, not confidence, and not signal quality, and nothing in this
+milestone abstains on them. Formal uncertainty-aware inference and
+abstention are Milestone 7.
+
+### Thresholds are engineering defaults
+
+The expert minimum-evidence gates (10 fit rows, 2 independent groups), the
+minimum meta-training row count (20), the neutral missing-quality fallback
+(0.5), and the minimum effective weight (1e-9) are engineering defaults.
+None is an empirically validated cut-off, and meeting one does not make a
+window, a fold, or a fusion scientifically adequate. `minimum_quality`
+defaults to 0.0 for exactly this reason: no validated quality cut-off
+exists to put there.
+
+### Personalization has been verified as software only
+
+Milestone 6 implements per-participant calibration: a personal-baseline
+z-score, a few-shot correction, an explicit cold-start path, and separate
+population-versus-personalized reporting over identical evaluation windows.
+Every limitation of the fusion layer above applies to it unchanged, plus:
+
+- **No personalized model here has been fitted to a real participant
+  label.** No subject in any run is a person; every one is a synthetic
+  identifier this repository generated.
+- **There is no evidence of a personalization benefit, in either
+  direction.** On this repository's generator the personalized variants
+  score *worse* than the population baseline on all four targets. That is a
+  property of a generator whose targets track absolute feature levels —
+  which within-subject z-scoring removes — not a property of
+  personalization, and not a property of people. It is reported as observed
+  rather than tuned away.
+- `RQ2` in `docs/RESEARCH_QUESTIONS.md` — do personalized baselines
+  outperform population models — is **unanswered**. A synthetic self-check
+  cannot answer it.
+- The minimum-evidence gates (3 calibration windows, 2 calibration classes,
+  3 finite values per feature) and the correction constants
+  (`kappa = 5.0`, `alpha = 1.0`) are engineering defaults. None is
+  validated, and none was tuned: tuning on synthetic data would fit the
+  generator.
+- The calibration/evaluation boundary has never been exercised against a
+  real session, a real pause, or a real device dropout. It has only met
+  windows this repository laid out on a regular grid.
+- A subject's personal baseline is estimated from as few as three finite
+  values per feature. Whether that is enough for any real signal is
+  unknown.
+- Personalized calibration here is **subject adaptation**, not uncertainty
+  calibration. It produces no confidence estimate and withholds no
+  prediction.
+
+### Not implemented in Milestone 6
+
+Temporal neural networks, online inference, confidence-based abstention,
+selective prediction, personalized confidence thresholds, adaptation
+policy, dashboard pages, MLflow, DVC, Docker, and deployment. Those
+thresholds and abstention are Milestone 7; the only thresholds in the
+personalization layer decide whether a *correction is fitted*, never
+whether a *prediction is issued*.
+
+No per-subject model is trained from scratch: a handful of calibration
+windows cannot support one, and a per-subject estimator fitted on five
+windows would describe those five windows.
+
+No deep or neural fusion exists. Feature concatenation is called
+concatenation.
+
+### No medical, psychological, or adaptive-effectiveness claim
+
+Nothing in the fusion layer supports a medical, diagnostic, screening,
+monitoring, psychological, or clinical conclusion, and nothing here shows
+that adapting an environment on the basis of a fused estimate would help
 anyone.

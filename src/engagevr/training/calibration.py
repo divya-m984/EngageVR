@@ -54,6 +54,17 @@ MINIMUM_ISOTONIC_SAMPLES = 50
 #: Minimum calibration rows per class before isotonic regression is used.
 MINIMUM_ISOTONIC_SAMPLES_PER_CLASS = 10
 
+#: Minimum calibration rows per class before **any** calibrator is fitted.
+#:
+#: ``CalibratedClassifierCV`` resolves ``cv=None`` to a 5-fold stratified
+#: splitter and runs ``cross_val_predict`` over the calibration set even when
+#: the base estimator is frozen — freezing makes each inner fit a no-op, but
+#: the split still happens.  A class with fewer rows than the fold count
+#: cannot be split, and scikit-learn raises.  Checking first lets the
+#: pipeline record an unavailable calibrator with a reason instead of failing
+#: the fold.
+MINIMUM_CALIBRATION_SAMPLES_PER_CLASS = 5
+
 
 class CalibrationError(ValueError):
     """A calibration set is not usable."""
@@ -219,6 +230,32 @@ def calibrate_classifier(
             unavailable_reason=(
                 f"the calibration set contains no example of class(es) "
                 f"{missing}, so their probabilities cannot be calibrated"
+            ),
+        )
+
+    counts: dict[str, int] = {}
+    for label in y_calibration:
+        counts[str(label)] = counts.get(str(label), 0) + 1
+    thin = sorted(
+        label
+        for label, count in counts.items()
+        if count < MINIMUM_CALIBRATION_SAMPLES_PER_CLASS
+    )
+    if thin:
+        return base, CalibrationOutcome(
+            method=method,
+            calibrated_estimator=None,
+            fit_row_count=len(X_fit),
+            calibration_row_count=len(X_calibration),
+            fit_group_count=len(set(fit_groups)),
+            calibration_group_count=len(set(calibration_groups)),
+            unavailable_reason=(
+                f"class(es) {thin} have fewer than "
+                f"{MINIMUM_CALIBRATION_SAMPLES_PER_CLASS} calibration rows. "
+                "CalibratedClassifierCV cross-validates the calibration set "
+                "even over a frozen estimator, and a class thinner than the "
+                "fold count cannot be split. Calibration is skipped rather "
+                "than fitted on the estimator's own training rows."
             ),
         )
 
