@@ -376,7 +376,7 @@ champion and none is production-ready.
 
 ```bash
 uv run python -m engagevr fusion-demo \
-  --dataset artifacts/datasets/m6-synthetic.parquet \
+  --dataset artifacts/datasets/m5-synthetic.parquet \
   --target engagement_class \
   --folds 5 --seed 42 \
   --strategies early uniform-late quality-late \
@@ -431,7 +431,7 @@ engagement value.
 
 ```bash
 uv run python -m engagevr personalization-demo \
-  --dataset artifacts/datasets/m6-synthetic.parquet \
+  --dataset artifacts/datasets/m5-synthetic.parquet \
   --target engagement_class \
   --folds 5 --seed 42 \
   --calibration-windows 5 \
