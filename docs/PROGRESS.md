@@ -1,9 +1,10 @@
 # EngageVR -- Progress Tracker
 
-## Current Milestone: 6 -- Multimodal Fusion
+## Current Milestone: 7 -- Uncertainty-Aware Inference
 
-**Status:** Milestone 6 multimodal-fusion implementation complete; scientific
-evaluation on real participant-labelled multimodal data pending.
+**Status:** Milestone 7 uncertainty-aware inference implementation complete;
+scientific calibration and selective-prediction evaluation on real
+participant-labelled data pending.
 
 ## Milestone History
 
@@ -688,9 +689,126 @@ repository generated.
 4. Only then compare fusion strategies, or a population baseline against a
    personalized one, for any scientific purpose.
 
-### Milestone 7: Uncertainty-Aware Inference
+### Milestone 7: Uncertainty-Aware Inference, Selective Prediction, Abstention
 
-**Status:** Not started
+**Started:** 2026-08-16
+**Implementation completed:** 2026-08-16
+
+**Status:** Milestone 7 uncertainty-aware inference implementation complete;
+scientific calibration and selective-prediction evaluation on real
+participant-labelled data pending.
+
+**Deliverables:**
+- [x] `src/engagevr/schemas/uncertainty.py` -- every typed record, all
+      `extra="forbid"`: `UncertaintyMethod`,
+      `ProbabilityCalibrationStatus`, `PredictionSource`,
+      `ThresholdSource`, `ThresholdObjective`, `AbstentionReason`,
+      `AdaptationGateDecision`, `SignalQualitySummary`,
+      `EnsembleDisagreementReference`, `EvidenceGateConfiguration`,
+      `SelectivePredictionConfiguration`, `ClassificationConfidence`,
+      `RegressionPredictionInterval`, `PersonalThresholdRecord`,
+      `EstimatedThresholdRecord`, `AbstentionDecision`, `CoveragePoint`,
+      `SelectiveMetrics`, `RiskCoveragePoint`, `CoverageCurve`,
+      `AdaptationGateRecord`, `UncertaintyFoldResult`,
+      `UncertaintyEvaluation`, `UncertaintyExperimentManifest`
+- [x] `src/engagevr/training/uncertainty.py` -- pure algebra: entropy,
+      normalised entropy, top-two margin, confidence components,
+      inclusive-boundary acceptance, evidence gate, absolute residuals,
+      conformal order statistic and quantile, interval construction and
+      domain projection, leakage-safe threshold selection, personalized
+      threshold, coverage accounting, selective metrics, risk-coverage
+      points, AURC, deterministic run identity
+- [x] `src/engagevr/training/adaptation_gate.py` -- the confidence-aware
+      gate; imports nothing but two schema modules
+- [x] `src/engagevr/training/uncertainty_runner.py` -- orchestration,
+      four recorded group sets per fold, artifacts, manifest
+- [x] `src/engagevr/cli_milestone7.py` -- `uncertainty-demo`,
+      `uncertainty-train`
+- [x] `configs/defaults.yaml` -- documented `uncertainty:` section
+- [x] `src/engagevr/config.py` -- `UncertaintyConfig` and its four
+      sub-sections, with validation and `resolve()`
+- [x] `docs/UNCERTAINTY_AND_ABSTENTION.md`
+- [x] 390 new tests across five modules
+
+**Dependencies added:** **none.** numpy, scipy, scikit-learn, pandas,
+pyarrow, and joblib cover every computation. No PyTorch, TensorFlow, Keras,
+XGBoost, LightGBM, CatBoost, SHAP, Optuna, MLflow, DVC, Streamlit, Docker,
+or database.
+
+**What the milestone actually established:**
+
+The five concepts this milestone exists to separate -- signal quality,
+predicted probability, probability calibration, model confidence, and
+ensemble disagreement -- occupy five different fields and can never be read
+as one another. There is no field anywhere named merely `uncertainty`.
+
+An uncalibrated maximum is recorded as `selection_score`, never as
+`confidence_score`; the schema refuses the mistake. A regression target
+gets a split-conformal interval rather than a probability-shaped number. An
+abstained window keeps its original prediction and reduces coverage without
+becoming an error or a zero. The adaptation gate can block an action but
+cannot choose one.
+
+**Milestone 7 acceptance criteria** (`docs/PROJECT_PLAN.md`):
+
+| Criterion | Status |
+|-----------|--------|
+| 1. Predictions can abstain | **Met for the implementation.** Classification abstains below an inclusive-boundary confidence threshold; regression abstains on interval width or a missing interval; the evidence gate abstains on missing modalities, low recorded quality, or absent probability calibration. Seven distinct reason codes, canonical ordering, original prediction retained on every decision. Never exercised against a real prediction, because none exists. |
+| 2. Confidence is not confused with signal quality | **Met for the implementation.** Separate fields, separate reason codes, separate gates, and no arithmetic combining them anywhere (DEC-069). Enforced by schema validators and asserted by tests at the pure-function, schema, runner, artifact, and CLI levels. |
+| 3. Adaptation policy respects both thresholds | **Met for the GATE only.** A deterministic gate consumes an already-taken abstention decision, an already-evaluated evidence gate, and already-resolved thresholds, and reports `eligible` or `blocked` with reasons. **No adaptation policy is implemented**: the gate cannot choose an action, and `adaptation_gate.py` imports nothing but two schema modules, which a test asserts by parsing its AST (DEC-071). Policy, cooldown, hysteresis, and static/adaptive modes are Milestone 8. |
+
+**Not met / pending:**
+1. **Scientific calibration and selective-prediction evaluation on real
+   participant-labelled data.** No validated EngageVR participant dataset
+   exists and no approved engagement or cognitive-load label exists, so no
+   confidence value, coverage curve, or interval here has been checked
+   against a real outcome.
+2. Split conformal's coverage guarantee assumes **exchangeability** of
+   calibration and test points. Under grouped cross-validation those rows
+   come from different people. On the synthetic dataset, empirical interval
+   coverage varies between 0.846 and 0.963 per fold against a nominal 0.90;
+   the wide spread is what a violated assumption produces, and a cross-fold
+   mean near nominal is not the guarantee holding. No conformal coverage
+   guarantee is claimed for real EngageVR data (DEC-067).
+3. Physical-webcam validation remains pending (from Milestone 2/3).
+4. UBFC-rPPG validation remains pending.
+5. Unity compilation and runtime validation remain pending.
+6. Subject-conditional conformal intervals are **not implemented**: a
+   per-subject residual distribution from a handful of windows would
+   overfit, and doing it with labels would put a subject's own outcomes
+   into their own interval.
+7. Online inference is **not implemented**. The Milestone 4 protocol
+   version is untouched and no new API route was added.
+
+**Decisions recorded:** DEC-066 through DEC-072 (see `docs/DECISIONS.md`)
+
+**Correction applied 2026-08-18 (DEC-072).** The regression coverage curve
+was originally swept over the classification confidence grid, with grid
+point `g` rescaled to `(1 - g) * widest_observed_width` so that one grid
+could serve both task types (DEC-070). Its x-axis was therefore neither a
+confidence nor a width, and the curve was labelled non-increasing while the
+rule it reported — `accept if interval_width <= W_max` — is non-*decreasing*
+in `W_max`. DEC-070 is superseded. The two axes are now distinct
+(`confidence_threshold` in probabilities, `maximum_interval_width` in the
+target's own units), each carries its own monotonicity direction, and the
+width sweep has its own configuration key
+`uncertainty.regression.interval_width_grid`, defaulting to null. With no
+width grid configured the run manufactures no curve and marks it
+unavailable with a stated reason. **This corrects the shape of an already
+reported synthetic curve; it is not a new result and no interval, quantile,
+or conformal rule changed.**
+
+**Remaining validation for this milestone:**
+1. Obtain, or design and gain approval for, a real engagement or
+   cognitive-load label instrument, then record labels with documented
+   provenance.
+2. Re-run `uncertainty-train --mode scientific` on that data and report
+   calibration quality, coverage, and empirical interval coverage with full
+   provenance.
+3. Check empirical interval coverage against the nominal level on real
+   subjects before any conformal claim is made.
+4. Only then treat any threshold in this repository as anything other than
+   an engineering default.
 
 ### Milestone 8: Adaptive Environment
 

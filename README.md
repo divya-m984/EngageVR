@@ -8,8 +8,9 @@
 
 ## Status
 
-**Milestone 6 multimodal-fusion implementation complete; scientific
-evaluation on real participant-labelled multimodal data pending.**
+**Milestone 7 uncertainty-aware inference implementation complete;
+scientific calibration and selective-prediction evaluation on real
+participant-labelled data pending.**
 
 Implemented: webcam capture, face landmarks (MediaPipe), behavioural proxy
 features, capture quality, a classical rPPG pipeline (GREEN / CHROM / POS,
@@ -409,7 +410,8 @@ provenance, and synthetic modality dropout, and exits non-zero.
   optional seeded synthetic dropout, with coverage recorded for each.
 - **Expert disagreement** — an ensemble-disagreement diagnostic. It is not
   uncertainty, it is not signal quality, and it does not trigger
-  abstention; that is Milestone 7.
+  abstention. Milestone 7 carries it beside its own output under this
+  same name.
 
 A missing modality is represented through **availability**, never through a
 zero, a uniform probability vector, or the training mean. A window that
@@ -484,8 +486,8 @@ See [Multimodal Fusion](docs/MULTIMODAL_FUSION.md).
 
 Personalized calibration here means adapting a population model to one
 subject. It is **not** uncertainty calibration, not a confidence estimate,
-and nothing abstains; personalized confidence thresholds and selective
-prediction are Milestone 7.
+and nothing abstains. Personalized confidence thresholds and selective
+prediction are Milestone 7, below.
 
 Population and personalized results are reported separately, which is what
 Milestone 6 acceptance criterion 3 asks for. **A difference between them
@@ -494,6 +496,129 @@ On this repository's generator the personalized variants score *worse* than
 the population baseline; that describes a generator whose targets track
 absolute feature levels, not a person and not personalization. Whether
 personalized baselines outperform population models is unanswered.
+
+## Uncertainty, Selective Prediction, and Abstention (Milestone 7)
+
+```bash
+uv run python -m engagevr uncertainty-demo \
+  --dataset artifacts/datasets/m5-synthetic.parquet \
+  --target engagement_class --folds 5 --seed 42 \
+  --output artifacts/experiments/m7-engagement-uncertainty
+
+uv run python -m engagevr uncertainty-demo \
+  --dataset artifacts/datasets/m5-synthetic.parquet \
+  --target engagement_score --folds 5 --seed 42 \
+  --interval-width-grid 0,0.1,0.25,0.5,0.75,1.0 \
+  --output artifacts/experiments/m7-engagement-regression-uncertainty
+```
+
+`--interval-width-grid` sweeps maximum interval widths **in the target's
+own units**. Omit it and the run reports its operating point only, rather
+than manufacturing a curve from the classification confidence grid.
+
+### Five things, five fields
+
+Signal quality, predicted probability, probability calibration, model
+confidence, and ensemble disagreement are **different concepts** and stay
+in different fields. There is no field anywhere named merely
+`uncertainty`. **Low signal quality is never low engagement**, and quality
+is never multiplied into a model probability: the two gate an actionable
+estimate independently, each with its own reason code.
+
+### Classification
+
+```
+confidence = max_c p_calibrated(c | x)     accept if confidence >= tau
+H(p)       = -sum_c p_c ln(p_c)            (nats)
+margin     = p_(1) - p_(2)
+```
+
+The acceptance boundary is **inclusive**. When a fold produces no
+calibrator, the identical maximum is recorded as a `selection_score` under
+an explicitly uncalibrated policy and confidence-based abstention is
+**refused** — the schema will not let an uncalibrated maximum be persisted
+as calibrated confidence.
+
+`0.70` is an **engineering default**, not an optimum and not a production
+threshold. An optional leakage-safe estimator can choose a threshold from
+each fold's calibration groups; it never reads an outer-test label, and it
+reports *unavailable* rather than inventing one for an unreachable target.
+
+### Regression
+
+A point prediction has no class probability, so it gets a **split-conformal
+interval**:
+
+```
+r_i = |y_i - yhat_i|            on calibration groups only
+k   = ceil((n + 1) * (1 - alpha))
+q   = the k-th smallest residual
+interval(x) = [yhat(x) - q, yhat(x) + q]
+```
+
+When `k > n` the interval is **unavailable** with a reason — never widened
+to infinity, never fabricated. `1 - interval_width` is not computed
+anywhere; it would be a probability-shaped number with no probabilistic
+meaning. A missing interval is never treated as width zero.
+
+The conformal coverage guarantee assumes **exchangeability**, which grouped
+cross-validation over different people does not satisfy. **No coverage
+guarantee is claimed for real EngageVR data.**
+
+### Personalized thresholds
+
+A per-subject threshold shrunk toward the population value, derived from
+the subject's own earlier windows under Milestone 6's wall-clock boundary.
+**It reads no labels at all** — only the confidence scores the population
+model assigned to those windows — so an evaluation label cannot influence
+it by any path. Below the minimum evidence, the subject falls back to the
+population threshold with a stated reason.
+
+### Coverage is always reported with performance
+
+```
+coverage = accepted / total       accepted + abstained + unavailable = total
+```
+
+An abstained window reduces coverage and is **never** converted into an
+incorrect prediction or a zero. It keeps its original prediction, its
+probabilities, and its diagnostics. `metrics.json` carries an
+`all_windows` result and an `accepted_at_applied_threshold` result over the
+same folds, so an accepted-set score is never read as a whole-set score.
+
+### Two coverage axes, in opposite directions
+
+The two task types sweep different quantities, and each curve records which
+one it was swept over:
+
+| | Classification | Regression |
+|---|---|---|
+| x-axis | `confidence_threshold` | `maximum_interval_width` |
+| units | probability in [0, 1] | the target's own units |
+| rule | `accept if score >= tau` | `accept if interval_width <= W_max` |
+| raising it | stricter | more permissive |
+| coverage | non-increasing | non-decreasing |
+
+A width is never normalised into [0, 1] to reuse the confidence grid, and
+never inverted into `1 - width`. The width sweep has its own configuration
+key, `uncertainty.regression.interval_width_grid`, which is `null` by
+default — the right widths depend on the target's scale. With no grid
+configured, **no curve is manufactured**: the run reports its operating
+point and marks the width curve unavailable with a stated reason.
+
+### The adaptation gate is not an adaptation policy
+
+The gate answers only *"may an already-chosen action be acted upon?"*. It
+cannot choose an action, set a difficulty, address a scene, send a message,
+learn, or hold state between windows — `adaptation_gate.py` imports nothing
+but two schema modules, and a test asserts that by parsing its AST.
+Adaptation policy is Milestone 8.
+
+**No confidence value, threshold, curve, or interval here is validated.** A
+synthetic coverage curve describes this repository's generator; it is not
+evidence of real-world calibration, reliability, safety, or usefulness.
+
+See [Uncertainty and Abstention](docs/UNCERTAINTY_AND_ABSTENTION.md).
 
 ## Privacy
 
@@ -539,10 +664,13 @@ src/engagevr/         Python package
                       ablation, runner, artifacts (M5); fusion algebra,
                       modality experts, stacking, robustness, fusion
                       metrics, fusion artifacts, fusion runner,
-                      personalization algebra and runner (M6)
+                      personalization algebra and runner (M6);
+                      uncertainty algebra, uncertainty runner,
+                      adaptation gate (M7)
   cli_milestone5.py   features-demo / baseline-demo / baseline-train
   cli_milestone6.py   fusion-demo / fusion-train /
                       personalization-demo / personalization-train
+  cli_milestone7.py   uncertainty-demo / uncertainty-train
 configs/              YAML configuration files
 protocol/             Checked-in JSON Schema and contract fixtures (M4)
 scripts/              Model download, protocol-artefact generation
@@ -571,6 +699,7 @@ docs/                 Project documentation
 - [Model Evaluation](docs/MODEL_EVALUATION.md)
 - [Experiment Tracking](docs/EXPERIMENT_TRACKING.md)
 - [Multimodal Fusion](docs/MULTIMODAL_FUSION.md)
+- [Uncertainty and Abstention](docs/UNCERTAINTY_AND_ABSTENTION.md)
 
 ## Disclaimer
 

@@ -1707,3 +1707,308 @@ exact heavy-dropout condition.
 **Consequence:** The normal test run completes with **no warnings**. The
 Milestone 5 rule is untouched: a metric whose prerequisites are unmet is
 still `None` with a stated reason, never zero.
+
+---
+
+### DEC-066: Only an Already-Calibrated Source May Produce "Confidence"
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** Milestone 7 needs a number to threshold. The obvious candidate
+is the maximum predicted class probability. But Milestone 6 calibrates each
+modality expert and the early-fusion estimator and **never the fused
+probability vector** (`docs/MODEL_EVALUATION.md`, "Calibration is placed
+once"), so a late-fusion maximum has not been fitted against observed
+outcomes at all.
+
+**Decision:** `PredictionSource` offers exactly two members —
+`baseline_model` and `early_fusion` — both of which pass through the
+Milestone 5 calibration step. A late-fusion source is not offered, and
+`UncertaintyConfig` refuses one with a message naming the reason.
+
+When a fold's calibrator is nevertheless unavailable — usually a class with
+fewer than `MINIMUM_CALIBRATION_SAMPLES_PER_CLASS` rows — the identical
+number is recorded as `selection_score` under
+`max_uncalibrated_probability`, with a stated reason.
+`ClassificationConfidence` refuses to validate a record that populates
+`confidence_score` without the contract, so the mistake cannot be
+persisted.
+
+By default the evidence gate then refuses confidence-based abstention for
+that fold rather than thresholding an uncalibrated number as though it were
+calibrated. `require_probability_calibration_for_classification_confidence:
+false` opts into an explicitly named uncalibrated selection-score policy.
+
+**Alternatives rejected:** *Calibrate the fused vector post hoc.* That
+would be double calibration on a set that had already served as a
+calibration set for the experts, with no independent third split available.
+*Call the fused maximum confidence anyway.* That is the exact overstatement
+this milestone exists to prevent.
+
+**Consequence:** The shared test fixture is deliberately sized so that some
+folds calibrate and at least one does not, so both branches are exercised
+end to end rather than only in unit tests.
+
+---
+
+### DEC-067: The Split-Conformal Quantile Rule, and Refusal Below It
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** A regression target has no class probability, so it needs a
+different uncertainty representation. `1 - interval_width` would be a
+probability-shaped number with no probabilistic meaning, and an ensemble
+spread is not a calibrated interval.
+
+**Decision:** Split conformal absolute-residual intervals, with the exact
+finite-sample convention recorded on every record:
+
+```
+r_i = |y_i - yhat_i|                     on the fold's calibration groups
+k   = ceil((n + 1) * (1 - alpha))
+q   = the k-th smallest residual         (1-indexed)
+interval(x) = [yhat(x) - q, yhat(x) + q]
+```
+
+Residuals come from the calibration groups, which are disjoint from the fit
+groups and from the outer-test groups. Residuals from rows the model
+memorised would understate the interval, and `UncertaintyFoldResult` refuses
+to validate a fold where they overlap.
+
+**When `k > n` the interval is UNAVAILABLE with a reason.** It is not
+widened to infinity, and it is not fabricated. The rule first holds at
+`n = ceil(1/alpha) - 1`.
+
+**Assumption, stated rather than assumed away:** marginal coverage of at
+least `1 - alpha` holds under *exchangeability* of calibration and test
+points. Under grouped cross-validation those rows come from **different
+people**, so exchangeability is an assumption about between-subject
+variation that this repository has never tested — and one there is good
+reason to expect to fail. On the 30-subject synthetic dataset, empirical
+interval coverage varies between **0.846 and 0.963 per fold** against a
+nominal 0.90, with a cross-fold mean near nominal. The wide per-fold
+dispersion is what a violated exchangeability assumption produces; a mean
+that happens to land near nominal is not the guarantee holding. No
+conformal coverage guarantee is claimed for real EngageVR data.
+
+**Consequence:** Split conformal produces one quantile per fold, so the
+width sweep is all-or-none rather than a gradual curve. That is documented
+as a property of the method rather than smoothed over.
+
+---
+
+### DEC-068: The Personalized Threshold Reads No Labels At All
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** Milestone 6 deferred personalized confidence thresholds to
+Milestone 7. Fitting a per-subject rule from five calibration windows is an
+overfitting risk, and any rule that consumes labels is a leakage risk.
+
+**Decision:** A per-subject threshold that consumes **no label of any
+kind** — only the confidence scores the population model assigned to the
+subject's own earlier windows:
+
+```
+tau_raw = quantile(subject calibration confidence, 1 - target_coverage)
+lambda  = n / (n + kappa)
+tau_s   = (1 - lambda) * tau_population + lambda * tau_raw
+```
+
+clipped to `[0, 1]`, with numpy's `"lower"` quantile method so `tau_raw` is
+an *observed* confidence value rather than an interpolated one.
+
+This is a stronger safety statement than "we were careful not to pass a
+label": an evaluation label cannot influence the threshold by *any* path,
+because the function has no argument through which one could arrive.
+`PersonalThresholdRecord.uses_labels` is recorded as `false` and the
+validator refuses a record claiming otherwise.
+
+The temporal split is Milestone 6's `build_calibration_split`, unchanged,
+so the wall-clock calibration-before-evaluation boundary and the
+straddling-window exclusion are inherited rather than reimplemented. The
+calibration windows are removed from the fold's evaluated set, so a window
+never both derives a threshold and is scored under it.
+
+Below `minimum_personal_calibration_windows` the subject falls back to the
+population threshold with a stated reason.
+`fallback_to_population_threshold` cannot be disabled.
+
+**Alternatives rejected:** *Fit a per-subject calibrator or a per-subject
+classifier.* Both need labels and both would overfit a handful of windows.
+*Target accepted accuracy per subject.* Needs labels.
+
+**Consequence:** The rule addresses a real failure mode — a subject the
+model is uniformly less confident about being abstained on entirely, which
+is a measurement artefact presented as a property of that person — without
+any label-driven mechanism. It was not tuned to make synthetic
+personalization look better.
+
+---
+
+### DEC-069: Signal Quality Gates Separately, Never Multiplicatively
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** It is tempting to fold signal quality into the confidence
+score — `confidence * quality` — so that one number governs everything.
+
+**Decision:** The evidence gate is a **separate** component with its own
+reason codes, and quality is never multiplied into a model probability.
+
+No probabilistic model in this repository justifies treating a camera
+diagnostic as a likelihood term. Multiplying them would also destroy the
+distinction the whole milestone exists to preserve: a window blocked
+because the camera signal was poor is a different event from a window
+blocked because the model was unsure, and a single product cannot say which
+happened. Worse, it would make a measurement problem readable as a
+statement about a person.
+
+`evaluate_evidence_gate` returns `(passed, reasons)` with reasons in
+canonical order; evidence reasons precede model-confidence reasons, because
+an estimate built on absent evidence should not be discussed in terms of
+its confidence.
+
+Absence of a recorded quality is **not** a low quality: a modality with no
+quality column does not fail the gate unless
+`treat_missing_quality_as_failure` is set.
+
+**Consequence:** `signal_quality_below_gate`,
+`insufficient_measurement_evidence`, `required_modality_unavailable`,
+`probability_calibration_unavailable`, `below_confidence_threshold`,
+`prediction_interval_unavailable`, and `interval_too_wide` are seven
+distinct codes, and a run's `abstention_reason_counts` shows which fired.
+
+---
+
+### DEC-070: One Grid, Two Task Types, Higher Is Always Stricter
+
+**Date:** 2026-08-16
+**Status:** **Superseded by DEC-072 (2026-08-18)**
+
+**Context:** A classification threshold rises toward *stricter*; an
+interval-width maximum falls toward stricter. Using the same configured
+grid for both naively would make coverage non-increasing in one task type
+and non-decreasing in the other, and the monotonicity check — which is a
+correctness check, not a finding — would mean opposite things.
+
+**Decision (superseded):** One grid, with the invariant that **higher is
+stricter**. For classification, `accept if score >= g`. For regression,
+grid point `g` mapped to `maximum_width = (1 - g) * widest_observed_width`.
+
+**Why this was wrong.** The mapping made the reported regression curve
+incompatible with the acceptance rule the run actually applies. Its x-axis
+was neither a confidence nor a width: it was a dimensionless fraction of an
+observed maximum, so a grid point had no meaning outside the fold it was
+computed in, the axis moved when the data moved, and the curve was labelled
+"non-increasing" while the documented rule
+`accept if interval_width <= W_max` is non-*decreasing* in `W_max`. Sharing
+one configuration surface was not worth reporting a curve that contradicted
+the rule. Superseded by DEC-072.
+
+**Retained from this decision:** `accepts_interval_width` still accepts a
+`maximum` of exactly zero, so a configured width sweep may include its
+strictest endpoint. A zero configured as a run's operating policy is still
+refused separately, because a policy that abstains on every window is a
+configuration mistake rather than a curve endpoint. The evidence gate is
+still applied at every grid point, so a window blocked for missing evidence
+is blocked at every axis value and the direction contract holds regardless
+of the gate's configuration.
+
+---
+
+### DEC-071: The Adaptation Gate Is Bounded by What It Cannot Import
+
+**Date:** 2026-08-16
+**Status:** Accepted
+
+**Context:** Milestone 7 acceptance criterion 3 in `docs/PROJECT_PLAN.md`
+reads "adaptation policy respects both thresholds". That wording predates
+the M7/M8 split, and reading it as licence to implement a policy here would
+pull Milestone 8 forward.
+
+**Decision:** Implement the **gate only**. It answers "may an
+already-chosen action be acted upon?" and never "which action?".
+
+The boundary is enforced structurally rather than by intention:
+`adaptation_gate.py` imports nothing but `engagevr.schemas.targets` and
+`engagevr.schemas.uncertainty`, and a test parses the module's AST and
+asserts exactly that import set. A reviewer can establish that the module
+cannot send a message, choose a difficulty, or learn a policy by reading
+what it is allowed to import.
+
+The gate consumes already-computed information and recomputes nothing, so a
+gate decision can never disagree with the decision it gates. A disabled
+gate stops applying any additional requirement of its own but still refuses
+to declare an abstained or unavailable window eligible — that would be a
+false statement, not a relaxed policy.
+
+**Consequence:** Cooldown, hysteresis, manual override, static-versus-
+adaptive modes, and every reward or action vocabulary remain Milestone 8.
+The acceptance table records criterion 3 as met *for the gate*, and says
+explicitly that the policy is not implemented.
+
+---
+
+### DEC-072: Two Coverage Axes, in Their Own Units, in Their Own Directions
+
+**Date:** 2026-08-18
+**Status:** Accepted
+
+**Context:** DEC-070 forced one grid to serve both task types by rescaling
+interval widths into fractions of the widest observed width. That produced
+a regression coverage curve whose x-axis was not the quantity the
+acceptance rule compares against, and whose declared monotonicity direction
+was the opposite of the rule's.
+
+**Decision:** Selective prediction has **two distinct axes**, and a curve
+records which one it was swept over.
+
+| | Classification | Regression |
+|---|---|---|
+| axis | `confidence_threshold` | `maximum_interval_width` |
+| units | probability in [0, 1] | the target's own units |
+| rule | `accept if score >= tau` | `accept if interval_width <= W_max` |
+| raising it | stricter | more permissive |
+| coverage | non-increasing | non-decreasing |
+
+`CoverageAxis` and `MonotonicDirection` are enums; `CoverageCurve` carries
+both and validates the axis against its `task_type`, so a regression curve
+cannot be indexed by a classification confidence score and a classification
+curve cannot be indexed by a width. `coverage_is_monotonic` takes the
+direction as a required argument and refuses to check an axis in the
+direction that is not its own — the two checks are different assertions,
+not one assertion with a sign.
+
+The width grid is a **separate configuration surface**,
+`uncertainty.regression.interval_width_grid`, holding widths in the
+target's own units. It is validated finite and non-negative but **not**
+bounded to [0, 1], because a regression target need not live there. Each
+grid value is compared against the original interval width by the same rule
+the run applies. No width is normalised into [0, 1] to share the confidence
+grid, and none is inverted into `1 - width`.
+
+The grid defaults to `null`, because the right widths depend on a target
+scale this repository has not measured and inventing one would presume a
+scale. When it is null the run **manufactures no curve**: it records its
+operating point and marks the width curve unavailable with a reason that
+names the configuration key. `CoverageCurve` enforces this — a curve with
+no points must state why, and must report `coverage_is_monotonic: null`
+rather than a vacuously true claim.
+
+An operating point with no configured `maximum_interval_width` records
+`threshold: null` with a stated reason, never `0.0`. An absent width policy
+accepts every otherwise-available prediction; a width policy of `0.0` would
+accept none. Recording the first as the second would invert the reported
+meaning of the run.
+
+**Consequence:** The regression curve is now readable as the rule that
+produced it. Two configuration surfaces exist where there was one, and
+`CoverageCurve.threshold_grid` became `axis_values` because the values are
+no longer always thresholds on a probability. The synthetic regression
+curve is a rising step rather than a falling one — that is the corrected
+shape of the same data, not a new result.

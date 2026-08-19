@@ -216,7 +216,7 @@ Staged modelling pipeline from deterministic demo through uncertainty-aware fusi
 | C: Fusion | `training/fusion*.py`, `experts.py`, `stacking.py`, `robustness.py` | Early / late / quality-aware / stacked fusion, modality availability, quality weights | Implemented (M6) |
 | D: Temporal | `training/temporal.py` | LSTM/GRU/TCN | **Deferred** (DEC-005) |
 | E: Personal | `training/personalization*.py` | Per-user baseline, z-score, few-shot, cold-start, separate population reporting | Implemented (M6) |
-| F: Uncertainty | `uncertainty/calibration.py` | Abstention, conformal, ensemble disagreement | **Deferred** (M7) |
+| F: Uncertainty | `training/uncertainty*.py`, `adaptation_gate.py` | Calibrated confidence, entropy, margin, split-conformal intervals, selective prediction, abstention, coverage curves, adaptation gate | Implemented (M7) |
 
 #### Milestone 5 modules (`src/engagevr/training/`)
 
@@ -249,6 +249,9 @@ rather than XGBoost (DEC-037).
 | `schemas/personalization.py` | Personalization records; a cold start must reproduce the population prediction (DEC-063) |
 | `training/personalization.py` | Chronological calibration/evaluation split, personal baselines, corrections (DEC-061, DEC-062) |
 | `training/personalization_runner.py` | Population reference model, per-subject adaptation, separate reporting (DEC-060, DEC-064) |
+| `training/uncertainty.py` | Entropy, margin, confidence, evidence gate, conformal quantile, threshold selection, selective metrics, coverage curves (DEC-066, DEC-067, DEC-068, DEC-069, DEC-070) |
+| `training/uncertainty_runner.py` | Four recorded group sets per fold, decisions, curves, artifacts |
+| `training/adaptation_gate.py` | Gate only: may an already-chosen action be acted upon? Imports nothing but two schema modules (DEC-071) |
 | `cli_milestone6.py` | `fusion-demo` / `fusion-train` (DEC-059), `personalization-demo` / `personalization-train` |
 
 The fusion layer reuses the Milestone 5 splitter, preprocessing,

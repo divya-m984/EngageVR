@@ -548,3 +548,89 @@ Nothing in the fusion layer supports a medical, diagnostic, screening,
 monitoring, psychological, or clinical conclusion, and nothing here shows
 that adapting an environment on the basis of a fused estimate would help
 anyone.
+
+
+## Milestone 7: uncertainty-aware inference and abstention
+
+### Every threshold is an engineering default
+
+`population_confidence_threshold: 0.70`, `alpha: 0.10`,
+`minimum_personal_calibration_windows: 5`, `personal_target_coverage: 0.80`,
+`personal_shrinkage_constant: 10.0`, and every minimum-evidence count are
+**engineering defaults**. None was selected by looking at a result, none is
+empirically optimal, none is validated, and none is a production threshold.
+
+### No confidence value here has been checked against an outcome
+
+Calibration was fitted on SYNTHETIC labels. A calibrated probability states
+how often outcomes of a kind occurred at a predicted probability *in the
+evaluated folds*, and every one of those folds came from data this
+repository generated. Nothing here says how often a real person is engaged
+when the model reports 0.8.
+
+### Conformal coverage assumes exchangeability, which grouping violates
+
+Split conformal prediction guarantees marginal coverage of at least
+`1 - alpha` **when the calibration and test points are exchangeable**.
+Under grouped cross-validation those rows come from **different people**,
+and a physiological or behavioural signal is not exchangeable between one
+person and another.
+
+On the 30-subject synthetic dataset, empirical interval coverage varies
+between **0.846 and 0.963 per fold** against a nominal 0.90. The cross-fold
+mean lands near nominal, but the per-fold spread is wide — which is what a
+violated exchangeability assumption produces. A mean that happens to land
+near nominal is not the guarantee holding, and on a different set of
+subjects it need not.
+
+**No conformal coverage guarantee is claimed for real EngageVR data**, and
+per-fold coverage must be measured on real subjects before any coverage
+claim is made.
+
+### A synthetic coverage curve is not evidence
+
+A curve computed on synthetic data describes the generator this repository
+wrote. It is not evidence of real-world calibration, reliability, safety,
+or usefulness, and a lower area under the risk-coverage curve establishes
+none of those things.
+
+### The regression coverage curve is trivial by construction
+
+Split conformal produces one quantile per fold, so every window in a fold
+shares one interval width and the width sweep is all-or-none. That is a
+property of the method, stated rather than smoothed over. No more
+interesting curve was manufactured.
+
+### Personalized thresholds are label-free by design, and limited by it
+
+The per-subject threshold reads only the subject's own earlier confidence
+scores. That makes leakage structurally impossible, but it also means the
+rule cannot target accepted accuracy for that subject — it can only
+preserve a target *acceptance rate*. Whether that is the right per-subject
+objective is unknown and untested.
+
+Subject-conditional conformal intervals are **not implemented**: a
+per-subject residual distribution from a handful of calibration windows
+would overfit, and doing it with labels would put a subject's own outcomes
+into their own interval.
+
+### An abstention rate is not a safety property
+
+A high abstention rate means the declared rule was often unsatisfied. It
+does not mean the accepted predictions are correct, trustworthy, or safe to
+act on, and no result here shows that abstaining improves anything.
+
+### Not implemented in Milestone 7
+
+Adaptation policy, action selection, cooldown, hysteresis, manual override,
+static-versus-adaptive experimental modes, online inference, any new API
+route, any transport-protocol change, dashboard pages, MLflow, DVC, Docker,
+and deployment. The Milestone 7 adaptation **gate** can block an
+already-chosen action; it cannot choose one.
+
+### No safety, psychological, or clinical claim
+
+Nothing in the uncertainty layer supports a medical, diagnostic, screening,
+monitoring, psychological, or clinical conclusion. A confidence score is
+not certainty, not psychological confidence, and not safety; an abstention
+is not a guarantee that anything harmful was avoided.

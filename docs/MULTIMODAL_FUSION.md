@@ -374,7 +374,12 @@ outcome, and a note that a calibrated probability is neither certainty nor
 signal quality.
 
 **Abstention is not implemented here.** Coverage-versus-performance analysis
-and any online confidence policy belong to Milestone 7.
+and any online confidence policy belong to Milestone 7, which is now
+implemented — see `docs/UNCERTAINTY_AND_ABSTENTION.md`. Milestone 7 uses
+the **early-fusion** estimator or a Milestone 5 baseline as its confidence
+source, because those pass through probability calibration; a *late*-fusion
+fused vector is not calibrated and is deliberately not offered as one
+(DEC-066).
 
 ## Expert disagreement
 
@@ -404,7 +409,9 @@ This is an **ensemble-disagreement diagnostic**. It describes how far the
 modality estimators differed from one another on a window. It is not a
 calibrated uncertainty estimate, it is not signal quality, it is not model
 confidence, and **it does not trigger abstention**. Formal uncertainty-aware
-inference and abstention are Milestone 7, and nothing in this milestone
+inference and abstention are Milestone 7 (now implemented, and carrying
+this diagnostic beside its own output under its own Milestone 6 name), and
+nothing in this milestone
 gates a prediction on disagreement. The distinction is carried as a required
 `note` field on every stored summary.
 
@@ -605,7 +612,7 @@ grouped out-of-fold requirement.
 ```bash
 # Software verification on a synthetic dataset
 uv run python -m engagevr fusion-demo \
-  --dataset artifacts/datasets/m6-synthetic.parquet \
+  --dataset artifacts/datasets/m5-synthetic.parquet \
   --target engagement_class \
   --folds 5 --seed 42 \
   --strategies early uniform-late quality-late \
@@ -862,7 +869,10 @@ are kept in separate files:
 
 Neither is a confidence estimate and neither withholds a prediction.
 Personalized confidence thresholds, selective prediction, and abstention
-are **Milestone 7**, and `personalization.json` says so in a required
+are **Milestone 7** (now implemented; the personalized *confidence
+threshold* there reads no labels at all and reuses this milestone's
+wall-clock calibration boundary unchanged — DEC-068), and
+`personalization.json` says so in a required
 field. `docs/PROJECT_SPECIFICATION.md` Stage E lists "personalized
 thresholds"; the only thresholds implemented here are the benign
 minimum-evidence gates in the table above, which decide whether a
@@ -885,7 +895,7 @@ minimum-evidence gates in the table above, which decide whether a
 
 ```bash
 uv run python -m engagevr personalization-demo \
-  --dataset artifacts/datasets/m6-synthetic.parquet \
+  --dataset artifacts/datasets/m5-synthetic.parquet \
   --target engagement_class \
   --folds 5 --seed 42 \
   --calibration-windows 5 \
