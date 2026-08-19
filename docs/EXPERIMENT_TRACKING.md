@@ -300,5 +300,91 @@ constants, the population model types, the probability-calibration
 setting, and the EngageVR version. No wall clock and no random component
 participates.
 
+## Milestone 7: the uncertainty run directory
+
+Also the format above, extended. An uncertainty run writes:
+
+```
+uncertainty_config.json      resolved configuration, every equation, run-id inputs
+uncertainty.json             per-fold group sets, thresholds, counts, coverage
+thresholds.json              threshold provenance and the leakage rules
+selective_metrics.json       accepted-set performance beside its coverage
+coverage_curve.json          the deterministic axis sweep, with its x-axis named
+selective_predictions.parquet   the decision layer: accepted, abstained, why
+adaptation_gate.parquet      gate decisions; no column names an action
+```
+
+plus `dataset.json`, `feature_catalog.json`, `splits.json`,
+`calibration.json`, `metrics.json`, `predictions.parquet`,
+`checksums.json`, and `manifest.json`. The nine documents through
+`metrics.json` are its declared **required artifact set**, so a manifest
+claiming completion without one of them is refused.
+
+`metrics.json` is again the same `MetricsDocument`, with exactly two
+`ModelResult` entries over identical folds:
+
+| `model_name` | `model_kind` | Scores |
+|---|---|---|
+| `all_windows` | `all_windows` | Every evaluated window |
+| `accepted_at_applied_threshold` | `selective` | Only the accepted windows |
+
+`predictions.parquet` is the **unselected** record: what the model said
+before any threshold was applied. It carries the probability vector per
+class, the calibration status, `confidence_score` *or* `selection_score`
+(never both), `entropy`, `normalized_entropy`, `margin`, the interval
+bounds and width, the conformal quantile, `minimum_recorded_quality`,
+`available_modality_count`, and `ensemble_disagreement` — each in its own
+column, so the five concepts stay distinguishable in the artifact.
+
+`selective_predictions.parquet` is the **decision** layer, repeating the
+original prediction beside `accepted`, `abstained`,
+`primary_abstention_reason`, the full ordered `abstention_reasons` list,
+`applied_threshold`, `threshold_source`, `maximum_interval_width`, and
+`evidence_gate_passed`. Both tables carry the same
+`source_prediction_id`, so the effect of the selective layer is computable
+from the artifacts without re-running anything, and a reader never has to
+trust that an abstained row still holds its prediction.
+
+`thresholds.json` is the audit trail for the leakage claim: per fold, the
+fit / probability-calibration / threshold-selection / conformal-calibration
+/ outer-test group id lists, the estimated-threshold record with
+`used_outer_test_labels: false`, the conformal quantile with its order
+statistic and sample count, and every personal-threshold record with its
+calibration window ids, both boundary timestamps, and
+`uses_labels: false`. A test asserts no calibration group is also an
+outer-test group.
+
+`adaptation_gate.parquet` records the gate decision and its reasons. No
+column in it names an action, a difficulty, a scene, a reward, or a policy;
+a test asserts that.
+
+`coverage_curve.json` names its x-axis explicitly — `x_axis`,
+`x_axis_units`, and `monotonicity_rule` sit beside the curve — because the
+two axes carry different units and move in opposite directions. A
+classification curve is swept over `confidence_threshold` (a probability,
+coverage non-increasing); a regression curve over
+`maximum_interval_width` (the target's own units, coverage
+non-decreasing). When no width grid is configured the document carries no
+points and a `points_unavailable_reason` instead, rather than a curve
+manufactured from the confidence grid. `thresholds.json` records both
+grids, their units, and a statement that neither is derived from the
+other.
+
+### Uncertainty run identity
+
+```
+<target>-uncertainty-<selfcheck|sci>-<sha256(...)[:12]>
+```
+
+The hash covers the dataset fingerprint, the split-manifest fingerprint,
+the target, the task type, the prediction source, the seed, the probability
+calibration method, the confidence source and its definition, the
+population threshold, the threshold grid, every threshold-estimation
+setting, every personalized-threshold setting and the quantile method, the
+interval method, alpha, the maximum interval width, the clipping setting,
+the full evidence-gate configuration, the adaptation-gate setting, the
+modality groups, the model names, and the EngageVR version. No wall clock
+and no random component participates.
+
 Still no MLflow, no DVC, and no Docker. Tests assert that none appears in a
-fusion or a personalization run directory.
+fusion, a personalization, or an uncertainty run directory.

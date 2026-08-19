@@ -17,9 +17,12 @@ Usage::
     uv run python -m engagevr fusion-train --mode scientific --target engagement_class
     uv run python -m engagevr personalization-demo --target engagement_class --folds 5
     uv run python -m engagevr personalization-train --mode scientific --folds 5
+    uv run python -m engagevr uncertainty-demo --target engagement_class --folds 5
+    uv run python -m engagevr uncertainty-train --mode scientific --folds 5
 
 All outputs from the ``demo``, ``rppg-demo``, ``task-sim``, ``features-demo``,
-``baseline-demo``, ``fusion-demo``, and ``personalization-demo`` commands are
+``baseline-demo``, ``fusion-demo``, ``personalization-demo``, and
+``uncertainty-demo`` commands are
 deterministic SYNTHETIC data.  Capture
 outputs are behavioural proxies, NOT engagement, psychological, clinical, or
 diagnostic conclusions.  rPPG heart rates are signal-processing estimates, NOT
@@ -147,10 +150,12 @@ def _build_parser() -> argparse.ArgumentParser:
     from engagevr.cli_milestone4 import add_parsers
     from engagevr.cli_milestone5 import add_parsers as add_milestone5_parsers
     from engagevr.cli_milestone6 import add_parsers as add_milestone6_parsers
+    from engagevr.cli_milestone7 import add_parsers as add_milestone7_parsers
 
     add_parsers(sub)
     add_milestone5_parsers(sub)
     add_milestone6_parsers(sub)
+    add_milestone7_parsers(sub)
     return parser
 
 
@@ -708,6 +713,15 @@ def main(argv: list[str] | None = None) -> int:
             "personalization-train": cli_milestone6.run_personalization_train,
         }
         return milestone6[args.command](args)
+
+    if args.command in ("uncertainty-demo", "uncertainty-train"):
+        from engagevr import cli_milestone7
+
+        milestone7 = {
+            "uncertainty-demo": cli_milestone7.run_uncertainty_demo,
+            "uncertainty-train": cli_milestone7.run_uncertainty_train,
+        }
+        return milestone7[args.command](args)
 
     if args.command in ("serve", "task-sim", "session-inspect", "session-replay"):
         from engagevr import cli_milestone4

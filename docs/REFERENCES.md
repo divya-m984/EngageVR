@@ -474,3 +474,85 @@ windows cannot straddle it unnoticed.
 outperform population models. **Nothing in this milestone answers it.** No
 personalized model here has been fitted to a real participant label, and a
 synthetic self-check cannot support a claim in either direction.
+
+## Milestone 7: uncertainty, conformal prediction, selective prediction
+
+### Split conformal prediction
+
+- Vovk, V., Gammerman, A., & Shafer, G. (2005). *Algorithmic Learning in a
+  Random World.* Springer. DOI 10.1007/b106715.
+- Papadopoulos, H., Proedrou, K., Vovk, V., & Gammerman, A. (2002).
+  Inductive confidence machines for regression. *ECML 2002*, LNCS 2430,
+  345-356. DOI 10.1007/3-540-36755-1_29.
+- Lei, J., G'Sell, M., Rinaldo, A., Tibshirani, R. J., & Wasserman, L.
+  (2018). Distribution-free predictive inference for regression. *Journal
+  of the American Statistical Association*, 113(523), 1094-1111.
+  DOI 10.1080/01621459.2017.1307116.
+
+The interval implemented here is the standard split (inductive) conformal
+absolute-residual interval. The finite-sample quantile convention
+`k = ceil((n + 1)(1 - alpha))` and the resulting `[yhat - q, yhat + q]` are
+taken directly from that literature and recorded on every persisted record.
+
+**The coverage guarantee is conditional on exchangeability of the
+calibration and test points.** Under this project's grouped
+cross-validation those rows come from *different people*, so the assumption
+is not satisfied by construction, and the synthetic self-checks show
+empirical coverage varying widely between folds (0.846-0.963 against a
+nominal 0.90) even where the cross-fold mean lands near nominal. The
+guarantee is **not** claimed for EngageVR data. See
+`docs/LIMITATIONS.md`.
+
+### Selective prediction and risk-coverage analysis
+
+- Chow, C. K. (1970). On optimum recognition error and reject tradeoff.
+  *IEEE Transactions on Information Theory*, 16(1), 41-46.
+  DOI 10.1109/TIT.1970.1054406.
+- El-Yaniv, R., & Wiener, Y. (2010). On the foundations of noise-free
+  selective classification. *Journal of Machine Learning Research*, 11,
+  1605-1641.
+- Geifman, Y., & El-Yaniv, R. (2017). Selective classification for deep
+  neural networks. *NeurIPS 2017*, 4878-4887.
+
+The accept-if-`score >= tau` rule is Chow's reject option, and the
+coverage-versus-risk presentation is the standard selective-prediction
+report. Both are implemented directly; nothing from these papers is
+reimplemented beyond the definitions, and no result here reproduces or
+contradicts any of them.
+
+`empirical_risk = 1 - accepted_accuracy` and the trapezoidal
+area-under-risk-coverage are stated as this repository's own definitions on
+every document that carries them, because AURC conventions differ across
+the literature in normalisation and in threshold ordering.
+
+### Probability calibration
+
+Reused unchanged from Milestone 5 — see the Milestone 5 section above for
+Platt scaling, isotonic regression, and expected calibration error. No new
+calibration method is introduced in this milestone, and a *fused*
+probability vector is never calibrated (DEC-066).
+
+### Entropy and margin
+
+`H(p) = -sum_c p_c log p_c` is Shannon entropy (Shannon, C. E., 1948, *A
+Mathematical Theory of Communication*, Bell System Technical Journal,
+27(3), 379-423, DOI 10.1002/j.1538-7305.1948.tb01338.x), reported in
+**nats**. The top-two margin is a standard ranking diagnostic with no
+single canonical citation; it is defined in full where it is used.
+
+Neither is a calibrated uncertainty estimate, and neither is treated as
+one: an entropy computed from a miscalibrated vector describes that
+miscalibrated vector.
+
+### The personalized threshold rule is not from the literature
+
+The shrunk-quantile personal threshold in DEC-068 is an engineering
+construction of this repository, not a published method. It is documented
+in full in `docs/UNCERTAINTY_AND_ABSTENTION.md` and is stated as an
+engineering default rather than a validated technique.
+
+`docs/RESEARCH_QUESTIONS.md` asks whether uncertainty-aware abstention
+improves the usefulness of an engagement estimate. **Nothing in this
+milestone answers it.** No confidence value here has been checked against a
+real outcome, and a synthetic coverage curve cannot support a claim in
+either direction.

@@ -29,6 +29,7 @@ from engagevr.schemas.personalization import (
 )
 from engagevr.schemas.session import DataSource, ExperimentCondition, Session
 from engagevr.schemas.targets import TargetName
+from engagevr.schemas.uncertainty import SelectivePredictionConfiguration
 from engagevr.training.fusion_runner import (
     FusionRunConfiguration,
     FusionRunResult,
@@ -38,6 +39,11 @@ from engagevr.training.personalization_runner import (
     PersonalizationRunConfiguration,
     PersonalizationRunResult,
     run_personalization,
+)
+from engagevr.training.uncertainty_runner import (
+    UncertaintyRunConfiguration,
+    UncertaintyRunResult,
+    run_uncertainty,
 )
 
 
@@ -248,6 +254,113 @@ def m6_personalization_regression_run(
             target_name=TargetName.ENGAGEMENT_SCORE,
             output_directory=directory,
             personalization=m6_personalization_configuration,
+            n_splits=3,
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Milestone 7: uncertainty, selective prediction, abstention
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def m7_selective_configuration() -> SelectivePredictionConfiguration:
+    """A selective-prediction policy sized for the shared fixture dataset.
+
+    Three calibration windows out of each subject's ten leaves a strictly
+    later evaluation region for every subject, so the personalized-threshold
+    path actually fires rather than falling back everywhere.  The grids are
+    short on purpose: these tests verify the sweeps' behaviour, not the shape
+    of any particular curve.
+
+    The two grids are separate surfaces.  ``threshold_grid`` holds
+    probabilities compared against a confidence score, and raising one is
+    stricter.  ``interval_width_grid`` holds widths in the target's own
+    units compared against a prediction-interval width, and raising one is
+    more permissive.  They happen to span the same numbers here only
+    because the fixture targets are scaled to ``[0, 1]``; neither is
+    derived from the other.
+    """
+    return SelectivePredictionConfiguration(
+        modalities=tuple(FusionModality),
+        threshold_grid=(0.0, 0.25, 0.5, 0.75, 1.0),
+        interval_width_grid=(0.0, 0.25, 0.5, 0.75, 1.0),
+        population_confidence_threshold=0.5,
+        personalized_thresholds_enabled=True,
+        personal_calibration_windows=3,
+        minimum_personal_calibration_windows=2,
+        alpha=0.2,
+    )
+
+
+@pytest.fixture(scope="session")
+def m7_dataset(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A SYNTHETIC dataset large enough to calibrate SOME folds and not others.
+
+    The shared Milestone 5 fixture is deliberately tiny, and its calibration
+    groups are too thin for ``CalibratedClassifierCV`` in every fold — which
+    exercises the refusal path but never the calibrated one. Twenty subjects
+    with sixteen windows each produces a run whose folds are *mixed*: some
+    calibrate, at least one does not. Both branches of the confidence
+    contract are therefore covered by one run.
+    """
+    configuration = SyntheticDatasetConfig(
+        seed=42,
+        subjects=20,
+        sessions_per_subject=2,
+        windows_per_session=8,
+        window_duration_seconds=10.0,
+        window_step_seconds=10.0,
+    )
+    directory = tmp_path_factory.mktemp("m7-dataset")
+    path = directory / "m7-synthetic.parquet"
+    write_dataset(
+        generate_synthetic_dataset(configuration),
+        path,
+        target_names=list(TargetName),
+        window_duration_seconds=configuration.window_duration_seconds,
+        window_step_seconds=configuration.window_step_seconds,
+        windows_overlap=configuration.windows_overlap,
+        creation_configuration=configuration.model_dump(mode="json"),
+        random_seed=configuration.seed,
+    )
+    return path
+
+
+@pytest.fixture(scope="session")
+def m7_uncertainty_classification_run(
+    tmp_path_factory: pytest.TempPathFactory,
+    m7_dataset: Path,
+    m7_selective_configuration: SelectivePredictionConfiguration,
+) -> UncertaintyRunResult:
+    """A completed SYNTHETIC classification uncertainty run."""
+    directory = tmp_path_factory.mktemp("m7-uncertainty-classification")
+    return run_uncertainty(
+        UncertaintyRunConfiguration(
+            dataset_path=m7_dataset,
+            target_name=TargetName.ENGAGEMENT_CLASS,
+            output_directory=directory,
+            selective=m7_selective_configuration,
+            n_splits=3,
+        )
+    )
+
+
+@pytest.fixture(scope="session")
+def m7_uncertainty_regression_run(
+    tmp_path_factory: pytest.TempPathFactory,
+    m7_dataset: Path,
+    m7_selective_configuration: SelectivePredictionConfiguration,
+) -> UncertaintyRunResult:
+    """A completed SYNTHETIC regression uncertainty run."""
+    directory = tmp_path_factory.mktemp("m7-uncertainty-regression")
+    return run_uncertainty(
+        UncertaintyRunConfiguration(
+            dataset_path=m7_dataset,
+            target_name=TargetName.ENGAGEMENT_SCORE,
+            output_directory=directory,
+            selective=m7_selective_configuration,
             n_splits=3,
         )
     )

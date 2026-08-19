@@ -6,6 +6,7 @@ supplied path) and validates it against typed Pydantic models.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from typing import Self
@@ -34,6 +35,15 @@ from engagevr.schemas.personalization import (
     PersonalizationMethod,
 )
 from engagevr.schemas.rppg import RoiRegion, RppgMethod
+from engagevr.schemas.uncertainty import (
+    CLASSIFICATION_METHODS,
+    REGRESSION_METHODS,
+    EvidenceGateConfiguration,
+    PredictionSource,
+    SelectivePredictionConfiguration,
+    ThresholdObjective,
+    UncertaintyMethod,
+)
 
 _DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "defaults.yaml"
 
@@ -1073,6 +1083,391 @@ class FusionConfig(BaseModel):
         )
 
 
+# --- Milestone 7: uncertainty, selective prediction, abstention ---
+
+
+class UncertaintyClassificationSettings(BaseModel):
+    """Classification confidence and selective-prediction defaults."""
+
+    confidence_source: str = "max_calibrated_probability"
+    population_confidence_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
+    threshold_grid: list[float] = Field(
+        default_factory=lambda: [
+            0.00,
+            0.10,
+            0.20,
+            0.30,
+            0.40,
+            0.50,
+            0.60,
+            0.70,
+            0.80,
+            0.90,
+            0.95,
+            0.99,
+        ]
+    )
+    estimate_population_threshold: bool = False
+    threshold_objective: str = "target_accepted_accuracy"
+    threshold_objective_target: float = Field(default=0.80, ge=0.0, le=1.0)
+    minimum_threshold_selection_samples: int = Field(default=30, ge=1)
+    minimum_threshold_selection_groups: int = Field(default=2, ge=1)
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if not self.threshold_grid:
+            raise ValueError(
+                "uncertainty.classification.threshold_grid must not be empty: a "
+                "coverage-versus-performance curve needs at least one threshold"
+            )
+        seen: set[float] = set()
+        for value in self.threshold_grid:
+            if not math.isfinite(value):
+                raise ValueError(
+                    f"uncertainty.classification.threshold_grid entry {value!r} "
+                    "is not finite"
+                )
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(
+                    f"uncertainty.classification.threshold_grid entry {value!r} "
+                    "is outside [0, 1]; a threshold is compared with a probability"
+                )
+            if value in seen:
+                raise ValueError(
+                    "uncertainty.classification.threshold_grid contains "
+                    f"{value!r} more than once"
+                )
+            seen.add(value)
+        valid = sorted(m.value for m in CLASSIFICATION_METHODS)
+        if self.confidence_source not in valid:
+            raise ValueError(
+                "uncertainty.classification.confidence_source names "
+                f"{self.confidence_source!r}, which is not a classification "
+                f"confidence method; valid: {valid}"
+            )
+        objectives = sorted(o.value for o in ThresholdObjective)
+        if self.threshold_objective not in objectives:
+            raise ValueError(
+                "uncertainty.classification.threshold_objective names "
+                f"{self.threshold_objective!r}; valid: {objectives}"
+            )
+        return self
+
+
+class UncertaintyRegressionSettings(BaseModel):
+    """Regression interval and width-abstention defaults."""
+
+    interval_method: str = "split_conformal_absolute_residual"
+    alpha: float = Field(default=0.10, gt=0.0, lt=1.0)
+    maximum_interval_width: float | None = Field(default=None, gt=0.0)
+    interval_width_grid: list[float] | None = None
+    clip_interval_to_target_range: bool = False
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        valid = sorted(m.value for m in REGRESSION_METHODS)
+        if self.interval_method not in valid:
+            raise ValueError(
+                "uncertainty.regression.interval_method names "
+                f"{self.interval_method!r}; valid: {valid}"
+            )
+        if not math.isfinite(self.alpha):
+            raise ValueError("uncertainty.regression.alpha is not finite")
+        if self.maximum_interval_width is not None and not math.isfinite(
+            self.maximum_interval_width
+        ):
+            raise ValueError(
+                "uncertainty.regression.maximum_interval_width is not finite"
+            )
+        if self.interval_width_grid is not None:
+            if not self.interval_width_grid:
+                raise ValueError(
+                    "uncertainty.regression.interval_width_grid is empty. "
+                    "Configure at least one width, or set it to null; an empty "
+                    "grid would report a sweep that evaluated nothing."
+                )
+            seen: set[float] = set()
+            for width in self.interval_width_grid:
+                if not math.isfinite(width):
+                    raise ValueError(
+                        "uncertainty.regression.interval_width_grid entry "
+                        f"{width!r} is not finite"
+                    )
+                if width < 0.0:
+                    raise ValueError(
+                        "uncertainty.regression.interval_width_grid entry "
+                        f"{width!r} is negative; an interval width is a "
+                        "non-negative distance in the target's own units. It "
+                        "is NOT a probability and is not confined to [0, 1]."
+                    )
+                if width in seen:
+                    raise ValueError(
+                        "uncertainty.regression.interval_width_grid contains "
+                        f"{width!r} more than once"
+                    )
+                seen.add(width)
+        return self
+
+
+class UncertaintyPersonalizationSettings(BaseModel):
+    """Personalized-confidence-threshold defaults.
+
+    Every minimum here is an engineering default.  Below any of them a
+    subject falls back to the population threshold and the run records the
+    reason; it never weakens the rule to keep a subject personalized.
+    """
+
+    confidence_threshold_enabled: bool = True
+    calibration_windows: int = Field(default=5, ge=0)
+    minimum_personal_calibration_windows: int = Field(default=5, ge=1)
+    minimum_evaluation_windows: int = Field(default=1, ge=1)
+    target_coverage: float = Field(default=0.80, gt=0.0, le=1.0)
+    shrinkage_constant: float = Field(default=10.0, gt=0.0)
+    fallback_to_population_threshold: bool = True
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if not self.fallback_to_population_threshold:
+            raise ValueError(
+                "uncertainty.personalization.fallback_to_population_threshold "
+                "cannot be disabled: a subject with too little calibration "
+                "evidence must fall back explicitly rather than have a rule "
+                "fitted from evidence too thin to support one"
+            )
+        if self.confidence_threshold_enabled and (
+            self.calibration_windows < self.minimum_personal_calibration_windows
+        ):
+            raise ValueError(
+                "uncertainty.personalization.calibration_windows "
+                f"({self.calibration_windows}) is below "
+                "minimum_personal_calibration_windows "
+                f"({self.minimum_personal_calibration_windows}), so every "
+                "subject would fall back and no personal threshold could ever "
+                "fire. Configure a reachable minimum."
+            )
+        return self
+
+
+class UncertaintyEvidenceGateSettings(BaseModel):
+    """Evidence-availability gate defaults, separate from model confidence."""
+
+    enabled: bool = True
+    require_prediction_available: bool = True
+    require_probability_calibration_for_classification_confidence: bool = True
+    minimum_available_modalities: int = Field(default=1, ge=0)
+    required_modalities: list[str] = Field(default_factory=list)
+    minimum_signal_quality: float | None = Field(default=None, ge=0.0, le=1.0)
+    treat_missing_quality_as_failure: bool = False
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        valid = {m.value for m in FusionModality}
+        for name in self.required_modalities:
+            if name not in valid:
+                extra = (
+                    " Quality is a support signal, not a measurement modality."
+                    if name == "quality"
+                    else ""
+                )
+                raise ValueError(
+                    "uncertainty.evidence_gate.required_modalities names "
+                    f"{name!r}, which is not a measurement modality; valid: "
+                    f"{sorted(valid)}.{extra}"
+                )
+        if len(set(self.required_modalities)) != len(self.required_modalities):
+            raise ValueError(
+                "uncertainty.evidence_gate.required_modalities contains duplicates"
+            )
+        return self
+
+    def resolve(self) -> EvidenceGateConfiguration:
+        """Build the typed evidence-gate configuration."""
+        return EvidenceGateConfiguration(
+            enabled=self.enabled,
+            require_prediction_available=self.require_prediction_available,
+            require_probability_calibration_for_classification_confidence=(
+                self.require_probability_calibration_for_classification_confidence
+            ),
+            minimum_available_modalities=self.minimum_available_modalities,
+            required_modalities=tuple(
+                FusionModality(name) for name in self.required_modalities
+            ),
+            minimum_signal_quality=self.minimum_signal_quality,
+            treat_missing_quality_as_failure=self.treat_missing_quality_as_failure,
+        )
+
+
+class UncertaintyAdaptationGateSettings(BaseModel):
+    """Adaptation-gate defaults.
+
+    The gate decides only whether an already-chosen action may be acted
+    upon.  There is no policy setting here because there is no policy:
+    choosing an adaptation is Milestone 8.
+    """
+
+    enabled: bool = True
+
+
+class UncertaintyConfig(BaseModel):
+    """Uncertainty-aware inference defaults (Milestone 7).
+
+    Every threshold here is an ENGINEERING DEFAULT.  None was selected by
+    looking at a result, none is empirically optimal, none is validated,
+    and none is a production threshold.
+    """
+
+    prediction_source: str = "baseline_model"
+    modalities: list[str] = Field(
+        default_factory=lambda: ["behavioural", "head_pose", "rppg", "task"]
+    )
+    model_classification: str = "logistic_regression"
+    model_regression: str = "ridge"
+
+    classification: UncertaintyClassificationSettings = Field(
+        default_factory=UncertaintyClassificationSettings
+    )
+    regression: UncertaintyRegressionSettings = Field(
+        default_factory=UncertaintyRegressionSettings
+    )
+    personalization: UncertaintyPersonalizationSettings = Field(
+        default_factory=UncertaintyPersonalizationSettings
+    )
+    evidence_gate: UncertaintyEvidenceGateSettings = Field(
+        default_factory=UncertaintyEvidenceGateSettings
+    )
+    adaptation_gate: UncertaintyAdaptationGateSettings = Field(
+        default_factory=UncertaintyAdaptationGateSettings
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        valid_sources = sorted(s.value for s in PredictionSource)
+        if self.prediction_source not in valid_sources:
+            extra = ""
+            if "late" in self.prediction_source:
+                extra = (
+                    " Milestone 6 calibrates each modality expert and the "
+                    "early-fusion estimator but never the FUSED probability "
+                    "vector, so a late-fusion maximum is not calibrated "
+                    "confidence and is not offered as a confidence source."
+                )
+            raise ValueError(
+                f"uncertainty.prediction_source names {self.prediction_source!r}, "
+                f"which is not an implemented source; valid: {valid_sources}.{extra}"
+            )
+        valid = {m.value for m in FusionModality}
+        for name in self.modalities:
+            if name not in valid:
+                extra = (
+                    " Quality is a support signal, not a measurement modality."
+                    if name == "quality"
+                    else ""
+                )
+                raise ValueError(
+                    f"uncertainty.modalities names {name!r}, which is not a "
+                    f"measurement modality; valid: {sorted(valid)}.{extra}"
+                )
+        if len(set(self.modalities)) != len(self.modalities):
+            raise ValueError("uncertainty.modalities contains duplicates")
+        return self
+
+    def resolve(
+        self,
+        *,
+        prediction_source: str | None = None,
+        population_confidence_threshold: float | None = None,
+        alpha: float | None = None,
+        maximum_interval_width: float | None = None,
+        threshold_grid: Sequence[float] | None = None,
+        interval_width_grid: Sequence[float] | None = None,
+        estimate_population_threshold: bool | None = None,
+        personalized_thresholds_enabled: bool | None = None,
+    ) -> SelectivePredictionConfiguration:
+        """Build the typed selective-prediction configuration, with overrides.
+
+        Raises
+        ------
+        ValueError
+            If the resulting combination is not a valid configuration.
+        """
+        grid = (
+            list(self.classification.threshold_grid)
+            if threshold_grid is None
+            else list(threshold_grid)
+        )
+        personalized = (
+            self.personalization.confidence_threshold_enabled
+            if personalized_thresholds_enabled is None
+            else personalized_thresholds_enabled
+        )
+        # The width grid is a separate surface from the confidence grid: its
+        # values are distances in the target's own units, so it is neither
+        # defaulted from nor derived from ``threshold_grid``.
+        widths = (
+            self.regression.interval_width_grid
+            if interval_width_grid is None
+            else list(interval_width_grid)
+        )
+        return SelectivePredictionConfiguration(
+            prediction_source=PredictionSource(
+                prediction_source
+                if prediction_source is not None
+                else self.prediction_source
+            ),
+            modalities=tuple(FusionModality(name) for name in self.modalities),
+            model_classification=self.model_classification,
+            model_regression=self.model_regression,
+            confidence_source=UncertaintyMethod(self.classification.confidence_source),
+            population_confidence_threshold=(
+                self.classification.population_confidence_threshold
+                if population_confidence_threshold is None
+                else population_confidence_threshold
+            ),
+            threshold_grid=tuple(sorted(grid)),
+            estimate_population_threshold=(
+                self.classification.estimate_population_threshold
+                if estimate_population_threshold is None
+                else estimate_population_threshold
+            ),
+            threshold_objective=ThresholdObjective(
+                self.classification.threshold_objective
+            ),
+            threshold_objective_target=(self.classification.threshold_objective_target),
+            minimum_threshold_selection_samples=(
+                self.classification.minimum_threshold_selection_samples
+            ),
+            minimum_threshold_selection_groups=(
+                self.classification.minimum_threshold_selection_groups
+            ),
+            interval_method=UncertaintyMethod(self.regression.interval_method),
+            alpha=self.regression.alpha if alpha is None else alpha,
+            maximum_interval_width=(
+                self.regression.maximum_interval_width
+                if maximum_interval_width is None
+                else maximum_interval_width
+            ),
+            interval_width_grid=(None if widths is None else tuple(sorted(widths))),
+            clip_interval_to_target_range=(
+                self.regression.clip_interval_to_target_range
+            ),
+            personalized_thresholds_enabled=personalized,
+            personal_calibration_windows=self.personalization.calibration_windows,
+            minimum_personal_calibration_windows=(
+                self.personalization.minimum_personal_calibration_windows
+            ),
+            minimum_evaluation_windows=(
+                self.personalization.minimum_evaluation_windows
+            ),
+            personal_target_coverage=self.personalization.target_coverage,
+            personal_shrinkage_constant=self.personalization.shrinkage_constant,
+            fallback_to_population_threshold=(
+                self.personalization.fallback_to_population_threshold
+            ),
+            evidence_gate=self.evidence_gate.resolve(),
+            adaptation_gate_enabled=self.adaptation_gate.enabled,
+        )
+
+
 # --- Root model ---
 
 
@@ -1109,6 +1504,9 @@ class EngageVRConfig(BaseModel):
     personalization: PersonalizationConfig = Field(
         default_factory=PersonalizationConfig
     )
+
+    # Milestone 7
+    uncertainty: UncertaintyConfig = Field(default_factory=UncertaintyConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path | None = None) -> Self:

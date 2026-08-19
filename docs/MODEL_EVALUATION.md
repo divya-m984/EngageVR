@@ -198,8 +198,9 @@ quality are kept in separate fields throughout, and the calibration
 document says so in a required `note` field.
 
 Abstention, coverage-versus-performance analysis, and any online
-confidence policy are **not implemented here**. They belong to
-Milestone 7.
+confidence policy are **not implemented here**. Milestone 7 builds them on
+top of this design without changing it — see the section at the end of this
+document and `docs/UNCERTAINTY_AND_ABSTENTION.md`.
 
 ## Metrics
 
@@ -464,3 +465,63 @@ probability calibration of the population model (`calibration.json`) and
 per-subject adaptation (`personalization.json`). Neither is a confidence
 estimate and neither withholds a prediction; abstention and selective
 prediction are Milestone 7.
+
+
+## Reuse by the Milestone 7 uncertainty runner
+
+The uncertainty runner reuses the same `build_splits` call, the same
+fold-local preprocessing, the same probability calibration on disjoint
+groups, and the same classification and regression metric functions. It
+adds one evaluation rule and one leakage rule of its own.
+
+**A score over accepted windows is always written with its coverage.**
+`metrics.json` carries two `ModelResult` entries over identical folds —
+`all_windows` (`model_kind: "all_windows"`) and
+`accepted_at_applied_threshold` (`model_kind: "selective"`) — and
+`uncertainty.json`, `selective_metrics.json`, and `coverage_curve.json`
+carry the accepted / abstained / unavailable counts beside every one of
+them. The three counts reconcile exactly with the total, and
+`CoveragePoint` refuses to validate if they do not.
+
+An abstained window is **not** scored. It is not counted as an error, it
+does not become a class, it does not become zero, and it does not enter any
+confusion matrix. This is the same invariant the Milestone 3 rPPG
+evaluation already used, reused rather than redefined.
+
+**Four group sets are recorded per fold, not two.** Milestone 5 records fit
+and calibration groups; Milestone 7 adds threshold-selection groups and
+conformal-calibration groups, and `UncertaintyFoldResult` re-checks all
+four against the outer-test groups before the document can be persisted.
+The outer-test fold never fits a model, a calibrator, a conformal residual
+distribution, or a threshold, and no threshold is read off the reported
+coverage curve.
+
+Two things are called calibration and are kept apart. *Probability
+calibration* (Milestone 5, `calibration.json`) asks whether a predicted
+probability matches observed frequency. *Conformal calibration* (Milestone
+7, the `conformal` block of the same file) fits a residual quantile for a
+regression interval. Neither is *personalized calibration* (Milestone 6),
+which is subject adaptation. All three write to different fields.
+
+The undefined-stays-null rule is inherited unchanged: an empty accepted set
+returns unavailable metrics with a reason, never zeros, and empirical risk
+is unavailable rather than zero when accepted accuracy is undefined.
+
+**The coverage curve has two axes, and they move in opposite directions.**
+A classification curve is swept over `confidence_threshold`, a probability
+compared by `accept if score >= tau`; raising it is stricter, so coverage
+must be **non-increasing**. A regression curve is swept over
+`maximum_interval_width`, a distance in the target's own units compared by
+`accept if interval_width <= W_max`; raising it is more permissive, so
+coverage must be **non-decreasing**. `CoverageCurve` records its axis,
+validates it against the task type, and carries the direction its
+monotonicity was checked in, so a curve cannot be read in the wrong
+direction and a regression curve cannot be indexed by a classification
+confidence score. The two grids are separate configuration surfaces: a
+width is never rescaled into [0, 1] to reuse the confidence grid and never
+inverted into `1 - width`. With no width grid configured, no curve is
+manufactured — the run reports its operating point and marks the width
+curve unavailable with a stated reason, on the same
+undefined-stays-null rule as every other metric here.
+
+See `docs/UNCERTAINTY_AND_ABSTENTION.md`.
