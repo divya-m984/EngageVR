@@ -1,10 +1,10 @@
 # EngageVR -- Progress Tracker
 
-## Current Milestone: 7 -- Uncertainty-Aware Inference
+## Current Milestone: 8 -- Adaptive Environment
 
-**Status:** Milestone 7 uncertainty-aware inference implementation complete;
-scientific calibration and selective-prediction evaluation on real
-participant-labelled data pending.
+**Status:** Milestone 8 adaptive-environment implementation complete;
+human-subject evaluation of adaptation appropriateness, usability, and benefit
+pending.
 
 ## Milestone History
 
@@ -812,7 +812,162 @@ or conformal rule changed.**
 
 ### Milestone 8: Adaptive Environment
 
-**Status:** Not started
+**Status:** IMPLEMENTATION COMPLETE (2026-08-19)
+
+**Milestone 8 adaptive-environment implementation complete; human-subject
+evaluation of adaptation appropriateness, usability, and benefit pending.**
+
+**Delivered:**
+- A typed, pure, deterministic adaptation policy
+  (`src/engagevr/adaptation/policy.py`). `evaluate_policy(input, state,
+  configuration)` mutates nothing, reads no clock, draws no random number, and
+  holds no module-level state.
+- **Milestone 7's gate as a hard prerequisite with no override.** A blocked
+  gate forces `HOLD`; M7's reasons are preserved verbatim in M7's canonical
+  order; `AdaptationProposal` embeds both targets' gate records and refuses to
+  validate unless both are `eligible`. A test asserts by AST that no M8 module
+  constructs a gate record or re-runs the gate evaluator.
+- **HOLD as a first-class, auditable decision** with 20 exact reason codes in
+  a canonical order. A hold carries no proposal and therefore no command
+  payload; a proposal carries exactly `proposal_eligible` and nothing else.
+- A documented conservative mapping (DEC-074) built from two stated principles
+  plus a default. Seven of nine cells hold. Present as data (`MAPPING_TABLE`)
+  so it can be checked against the documentation without following control
+  flow. Labelled an ENGINEERING DEMONSTRATION RULE everywhere it appears.
+- Conservative conflict resolution: opposite suggestions `HOLD` by default.
+  There is deliberately no `prefer_increase`.
+- Persistence (3 windows), cooldown (6 windows, minimum spacing 7), difficulty
+  bounds `[1, 5]` step 1, and a session budget of 10 proposals. Hysteresis is
+  emergent from these rather than a redundant knob (DEC-077).
+- Explicit, frozen, serialisable, session-scoped `AdaptationPolicyState`. One
+  session's state applied to another raises.
+- **Proposal separate from transport command** (DEC-073). A pure builder
+  reuses the existing `set_difficulty` action, sets `is_manual=False`, refuses
+  holds, blocked gates, out-of-bounds levels, and non-task target roles, and
+  **sends nothing**. Tests assert by AST that no M8 module imports a transport
+  module or calls `send`/`broadcast`/`publish`/`dispatch`.
+- A five-state lifecycle (`proposed` / `command_built` / `dispatched` /
+  `acknowledged` / `applied`, plus `rejected`) that cannot record `applied`
+  without a real Milestone 4 acknowledgement payload.
+- 15 deterministic controller scenarios, each building **real**
+  `AbstentionDecision` records and putting them through the **real**
+  `evaluate_adaptation_gate`, so a scenario cannot manufacture an eligible
+  gate for an abstained window.
+- `adaptation-demo` writing an auditable run directory: one trace row per
+  evaluation, controller metrics, the resolved configuration, the scenario
+  expectations, and checksums.
+- An optional guard-free software-controller comparison, explicitly labelled
+  as an action-frequency comparison and not a benefit claim.
+- The experimenter lock and the static/adaptive experimental condition as two
+  separate settings with two separate hold reasons (DEC-080).
+
+**Dependencies added:** none.
+
+**Protocol:** unchanged. `git diff --exit-code -- protocol/` is clean. The
+policy reuses the existing `set_difficulty` action; `pause_task`,
+`resume_task`, and `set_stimulus_interval` are deliberately unused.
+
+**Unity:** unchanged. `AdaptationReceiver.cs` already handles
+`set_difficulty` and M8 adds no wire action. Unity compilation and runtime
+validation remain pending — no Unity Editor is installed.
+
+**Synthetic controller diagnostics (SOFTWARE SELF-CHECK, NOT SCIENTIFIC
+EVALUATION; the full 15-scenario suite, default configuration):**
+
+| Quantity | Value |
+|---|---|
+| Evaluated policy windows | 192 |
+| Milestone 7 eligible / blocked | 173 / 19 |
+| Hold decisions | 173 |
+| Adaptation proposals | 19 (2 increases, 17 decreases) |
+| Direction reversals | 1 |
+| Minimum proposal spacing | 7 windows (= cooldown + 1) |
+| Longest same-direction streak | 10 |
+| Blocked oscillation attempts | 5 |
+| Eligible windows that adapted | 0.1098 |
+| Commands built / dispatched / acknowledged | 19 / 0 / 0 |
+| Guard-free comparison controller | 136 proposals vs 19 |
+
+Hold reasons: `insufficient_persistence` 55, `cooldown_active` 61,
+`target_in_deadband` 15, `gate_blocked` 12, `prediction_abstained` 12,
+`already_at_minimum` 6, `already_at_maximum` 6, `direction_conflict` 6,
+`insufficient_evidence` 6, `session_adaptation_budget_exhausted` 4,
+`direction_change_blocked` 1, `duplicate_window` 1.
+
+These are **controller-software diagnostics only**. They are not engagement
+improvement, cognitive-load reduction, learning improvement, comfort,
+adaptation effectiveness, or evidence about any person.
+
+**Determinism:** two runs of the demo produce byte-identical
+`adaptation_trace.parquet` (verified by SHA-256). The trace carries no
+wall-clock column by design (DEC-081).
+
+**Tests:** 2352 passed, 1 skipped (from 2090 passed, 1 skipped at the start of
+the milestone). 261 new tests across six modules. No test requires a webcam,
+MediaPipe asset, Unity, network access, participant data, an external dataset,
+MLflow, or Docker.
+
+**Acceptance criteria (software level):**
+
+| Criterion | Status |
+|---|---|
+| 1. A typed deterministic adaptation policy exists | **Met** |
+| 2. M7's gate is a hard prerequisite and cannot be bypassed | **Met** — enforced in control flow, in `AdaptationProposal`, in `AdaptationPolicyDecision`, and by an AST test |
+| 3. HOLD is explicit and auditable | **Met** — 20 reason codes, canonical order, one trace row per evaluation |
+| 4. A conservative mapping is documented | **Met** — DEC-074, `docs/ADAPTIVE_ENVIRONMENT.md` §6 |
+| 5. Conflicting evidence resolves conservatively | **Met** — `hold` by default; no `prefer_increase` exists |
+| 6. Persistence prevents one-window reactions | **Met** — scenario 4 |
+| 7. Cooldown and hysteresis prevent rapid oscillation | **Met** — scenarios 8 and 9; minimum spacing 7 |
+| 8. Bounds prevent illegal proposals | **Met** — scenarios 10 and 11; clamping recorded, never silent |
+| 9. A session budget can limit total changes | **Met** — scenario 12 |
+| 10. Policy state is explicit, session-scoped, serialisable, deterministic | **Met** |
+| 11. Proposals are separate from transport commands | **Met** — DEC-073 |
+| 12. Command construction reuses existing vocabulary, no network side effect | **Met** — protocol unchanged; AST tests |
+| 13. Synthetic scenario traces and controller metrics are generated | **Met** |
+| 14. No synthetic result becomes a human-benefit claim | **Met** |
+| 15. Existing M1-M7 behaviour remains intact | **Met** — full suite green; protocol artifacts unchanged |
+
+**From the project plan / specification:**
+
+| Criterion | Status |
+|---|---|
+| No rapid adaptation oscillation | **Met at the software level** — minimum spacing 7 windows, 1 reversal in 192 windows, 5 reversal attempts blocked |
+| Same input produces reproducible policy output | **Met** — byte-identical trace across runs |
+| Experimenter can disable adaptation | **Met** — `adaptation.enabled` |
+| Static and adaptive modes are clearly separated | **Met** — `adaptation.experiment_mode`, separate hold reason, participates in the run id |
+
+**Not met / pending:**
+1. **Human-subject evaluation of adaptation appropriateness, usability, and
+   benefit.** No adaptation proposed by this policy has ever been shown to a
+   person, and there is no approval for a study.
+2. The policy consumes estimates whose own validity is unestablished: no
+   validated participant-labelled engagement or cognitive-load study exists.
+3. Every threshold, dwell time, cooldown, bound, and budget is an
+   unvalidated engineering default.
+4. The controller has run only on hand-written scenarios, never against a live
+   stream, a recorded session, or a real Milestone 7 run.
+5. No policy-derived command has been dispatched, acknowledged, or applied.
+   Live transport integration is deferred.
+6. The specification's "feedback or introduce variation" and "trigger a break"
+   responses are **not implemented**: the protocol cannot express the first,
+   and no fatigue estimator exists for the second.
+7. Regression-driven policy input is implemented but disabled by default; no
+   band boundary has been measured (DEC-079).
+8. Unity compilation and runtime validation remain pending.
+
+**Decisions recorded:** DEC-073 through DEC-082 (see `docs/DECISIONS.md`)
+
+**Remaining validation for this milestone:**
+1. Design and gain institutional approval for a human-subject study of
+   adaptation appropriateness and acceptability.
+2. Obtain validated participant labels before any estimate feeding this policy
+   can be evaluated at all.
+3. Evaluate whether participants find the proposed adaptations appropriate,
+   before any question of benefit is raised.
+4. Only then consider a static-versus-adaptive comparison, with a
+   pre-registered analysis plan.
+5. Unity compilation and runtime validation of the existing `set_difficulty`
+   path.
 
 ### Milestone 9: Dashboard
 

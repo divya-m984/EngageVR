@@ -2012,3 +2012,373 @@ produced it. Two configuration surfaces exist where there was one, and
 no longer always thresholds on a probability. The synthetic regression
 curve is a rising step rather than a falling one — that is the corrected
 shape of the same data, not a new result.
+
+---
+
+### DEC-073: Milestone 8 Chooses; It Does Not Send
+
+**Date:** 2026-08-19
+**Status:** Accepted
+
+**Context:** Milestone 7 answers whether an already-chosen action *may* be
+acted upon. Milestone 8 is the first layer in this project that chooses
+anything. The obvious shape — a policy that decides and then puts the
+resulting command on the Milestone 4 WebSocket — would have made "the rule
+recommended a change" and "the environment changed" the same event, at the
+moment the project has no evidence that any adaptation helps anyone.
+
+**Decision:** A **policy decision is not a network transmission**, and the two
+are different objects.
+
+`AdaptationPolicyDecision` carries no command id, no wire payload, no address,
+and no `send`. Translating an approved `AdaptationProposal` into the existing
+Milestone 4 `adaptation_command` payload is a separate pure function in
+`adaptation/command.py` that builds an object and returns it.
+
+The boundary is enforced by imports rather than by convention.
+`adaptation/policy.py` imports two schema modules and its own mapping table;
+it imports nothing from `engagevr.api`, `engagevr.transport`, `engagevr.task`,
+or `engagevr.training`. Tests parse the AST of every module in
+`engagevr.adaptation` and assert that none imports a transport module and that
+none calls `send`, `send_json`, `broadcast`, `publish`, or `dispatch`.
+
+Milestone 8 therefore stops at `command_built`. The `--dispatch` flag exists
+only so that asking for live transport produces a stated refusal rather than
+silently doing nothing.
+
+**Consequence:** The whole path — prediction, gate, policy, proposal, command
+object — is unit-testable with no server, no WebSocket, no Unity, and no task
+simulator. The cost is that an integrated live loop does not exist and will
+need a deliberate decision in a later milestone.
+
+---
+
+### DEC-074: The Adaptation Mapping Is a Demonstration Rule Built From Two Principles
+
+**Date:** 2026-08-19
+**Status:** Accepted
+
+**Context:** `docs/PROJECT_SPECIFICATION.md` gives an example policy. Three of
+its rows are expressible with the protocol's `set_difficulty` action; two are
+not. Writing nine independent table cells would have hidden which cells came
+from the specification and which were invented, and the obvious invention —
+"low engagement, therefore make it harder" — is a psychological assumption
+rather than a reading of the evidence.
+
+**Decision:** The 3x3 table is **generated from two stated principles plus a
+default**, and it is present as data (`MAPPING_TABLE`) so it can be checked
+against the documentation without following control flow.
+
+- **P1, overload protection:** cognitive load `HIGH` suggests `DECREASE`. The
+  only protective direction, and the only rule that fires on one signal alone.
+- **P2, engagement headroom:** engagement `HIGH` suggests `INCREASE`, and an
+  increase is proposed only when cognitive load is affirmatively `LOW`. A
+  `MEDIUM` load is the absence of a reading that supports an increase, not a
+  reading that supports one. This is the specification's row 1 verbatim.
+- **P3:** everything else holds.
+
+| eng \ load | low | medium | high |
+|---|---|---|---|
+| low | hold | hold | **decrease** |
+| medium | hold | hold (deadband) | **decrease** |
+| high | **increase** | hold | hold (conflict) |
+
+Two specification rows are deliberately **not** implemented. "Declining
+engagement + low or moderate load -> feedback or introduce variation" names a
+response this protocol cannot express, so the policy holds with
+`no_expressible_action` rather than substituting a difficulty change for the
+response the specification actually named. "Sustained fatigue -> a break" has
+no fatigue estimator behind it; inferring fatigue from blink proxies or
+heart-rate estimates is the measurement-to-construct leap
+`reject_automatic_derivation` refuses, so `pause_task` is never issued even
+though the protocol supports it.
+
+Every decision additionally records what **each signal alone** suggested,
+whether they conflicted, and how the conflict was resolved. Conflicts are
+never hidden behind the resolved direction.
+
+**Consequence:** The policy is conservative by construction: seven of nine
+cells hold. It is labelled an ENGINEERING DEMONSTRATION RULE in the
+configuration, in every persisted document, in the CLI output, and in the
+`reason` field of every command it builds. It is not a validated
+interpretation of human state, and no part of this repository claims it is.
+
+---
+
+### DEC-075: Both Ordinal Targets Are Required, Because the Mapping Says So
+
+**Date:** 2026-08-19
+**Status:** Accepted
+
+**Context:** A policy could act on engagement alone, on cognitive load alone,
+or on both. Accepting partial evidence is more permissive and would let the
+demo produce more adaptations.
+
+**Decision:** Both `engagement_class` and `cognitive_load_class` must be
+present and Milestone 7-eligible. A missing target holds with
+`insufficient_evidence`.
+
+This is **derived from the mapping rather than imposed on it**. Under DEC-074,
+an increase requires high engagement *and* low cognitive load, and a decrease
+requires high cognitive load. A single target therefore cannot select any
+direction. Accepting one target would mean supplying the missing signal's
+state from somewhere, and the only available sources are a default (an
+assumption) or the measurement itself (the leap `reject_automatic_derivation`
+refuses).
+
+**Consequence:** An offline run consumes two Milestone 7 targets. The
+scenario suite exercises the policy without Milestone 7 runs at all, by
+building real `AbstentionDecision` records and putting them through the real
+gate function. Single-target operation would need a documented single-signal
+rule first, which would be a new research claim rather than a configuration
+change.
+
+---
+
+### DEC-076: The Dwell Count Resets on Hold; Cooldown Is Counted in Windows
+
+**Date:** 2026-08-19
+**Status:** Accepted
+
+**Context:** Two temporal choices needed fixing, and the plausible-looking
+alternative was wrong in each case.
+
+*Persistence.* A decaying count (hold subtracts one instead of clearing)
+looks gentler. It lets evidence separated by contradicting windows accumulate
+into a dwell requirement that was never actually met: three supporting
+windows interleaved with three holds would eventually reach a threshold that
+"three consecutive supporting windows" was written to express.
+
+*Cooldown.* A seconds-based cooldown matches the specification's wording
+("at least 20-30 seconds") but makes an offline replay depend on wall-clock
+timestamps, so a re-run is only approximately reproducible.
+
+**Decision:**
+
+1. A window resolving to `HOLD` **resets** the dwell count to zero and clears
+   the pending direction. It does not decay it. A direction change restarts
+   the count at 1. A Milestone 7-blocked window resolves to `HOLD`, so a
+   blocked window can never count as supporting evidence.
+2. Cooldown is counted in **evaluation windows**, one primitive
+   (`cooldown_windows`), with no `cooldown_seconds` alongside it. The default
+   of 6 is the specification's 30 s at the default
+   `windowing.model_inference_seconds` of 5 s, and the derivation is written
+   in the configuration file. A proposal sets the counter to
+   `cooldown_windows`, so the minimum spacing between proposals is
+   `cooldown_windows + 1` evaluation windows.
+3. **Window passage is defined independently of evidence.** The cooldown
+   decreases on every evaluated window, blocked or not. A blocked window is
+   not evidence, but it is still a window; making time depend on evidence
+   would mean a run of unusable windows freezes the cooldown indefinitely.
+4. A **duplicate** window (same id at the same order as the previous
+   evaluation) is absorbed idempotently: no count advances and no guard
+   expires, so a retransmission cannot manufacture evidence or expire a
+   cooldown. An **out-of-order** window raises rather than being reordered.
+
+**Consequence:** The trace is byte-reproducible and every guard is auditable
+from `persistence_count_before/after` and `cooldown_remaining_before/after`.
+The wall-clock meaning of the cooldown depends on the stream's window cadence,
+which is stated as a limitation rather than hidden.
+
+---
+
+### DEC-077: Hysteresis Is Emergent; Confidence Is Not a Control Gain
+
+**Date:** 2026-08-19
+**Status:** Accepted
+
+**Context:** The specification lists hysteresis as a required safety control,
+and the natural reading is a dedicated parameter. Separately, a confidence
+score is a tempting step multiplier: act more decisively when the model is
+more certain.
+
+**Decision:** Neither knob exists.
+
+*Hysteresis.* It is implemented through mechanisms that already had to exist:
+the neutral-class deadband, the dwell requirement, the direction-change reset,
+and the cooldown. A proposal additionally **restarts** the dwell count at
+zero, so the next proposal in either direction needs fresh evidence rather
+than inheriting the previous window's. With the defaults a reversal therefore
+requires at least 7 windows, of which at least 3 consecutive must support the
+new direction. Adding a `hysteresis_*` parameter would be a redundant knob
+that could disagree with the mechanisms already enforcing the behaviour. A
+test asserts that no such field exists.
+
+*Step size.* `step` is a configured constant and is never multiplied by
+confidence. Confidence decided, in Milestone 7, whether this window may be
+acted on **at all**; reusing it as a gain would let a barely admissible
+estimate move the environment further than a clear one, which inverts what the
+threshold was for. `AdaptationProposal` carries no confidence field, and a
+test asserts that.
+
+The same reasoning bars signal quality from choosing a direction.
+`AdaptationTargetSuggestion` refuses to record a direction without an ordinal
+state, and an ordinal state comes only from a declared-ordinal class label or
+an explicitly configured regression band — never from a quality value.
+
+**Consequence:** Fewer parameters, and the ones that remain each mean exactly
+one thing. The behaviour the specification asked for is demonstrated by the
+`direction-reversal` scenario rather than asserted by a setting.
+
+---
+
+### DEC-078: An Ordinal Class Order Must Be Declared Twice, and the Two Must Agree
+
+**Date:** 2026-08-19
+**Status:** Accepted
+
+**Context:** The policy needs `low < medium < high`. The vocabulary is
+already an ordered tuple on `TargetSpec`, so reading `vocabulary.index(label)`
+would work today. It would also silently acquire a meaning it never had if
+the vocabulary were ever reordered, extended, or renamed — a nominal
+vocabulary listed in some arbitrary order would become an ordinal scale.
+
+**Decision:** The ordering is declared **twice**, and the two declarations
+must agree before the policy will map anything.
+
+1. `TargetSpec.class_order_is_ordinal` (new field, default `False`) states
+   whether a vocabulary is an ordered scale at all. Set `True` for
+   `engagement_class` and `cognitive_load_class`; a regression target may not
+   set it.
+2. `ORDINAL_CLASSIFICATION_TARGETS` in the Milestone 8 schema names the exact
+   vocabulary each target must declare.
+
+`ordinal_state_from_class` refuses with `AdaptationPolicyError` if the target
+is not declared ordinal, if its vocabulary is not the one the policy was
+written against, or if the label is not in it. Neither array position nor
+alphabetical order is consulted anywhere.
+
+**Consequence:** A vocabulary change stops the policy instead of quietly
+changing what "high" means. The cost is a small duplication that a test keeps
+in sync.
+
+---
+
+### DEC-079: Regression Mapping Exists and Is Disabled, With No Default Boundary
+
+**Date:** 2026-08-19
+**Status:** Accepted
+
+**Context:** The project has four targets: two ordinal classes and two
+continuous scores. Symmetry argues for driving the policy from either. But
+thresholding a continuous score needs boundaries, and this repository has
+never measured either score on a person, so any boundary would be invented.
+DEC-072 established the same point for interval widths.
+
+**Decision:** Regression mapping is implemented, fully tested, and **disabled
+by default**. The ordinal class targets carry a neutral class that already
+acts as a deadband, so classification is the first policy input and nothing is
+forced into a continuous form for symmetry. A regression target supplied while
+the mapping is off holds with `no_policy_for_target`.
+
+When enabled, `low_below` and `high_above` must both be stated for both score
+targets. Both default to `null`, and enabling the mapping without stating them
+is a configuration error naming the key, not a silent fallback. Boundaries are
+validated finite, ordered, and inside the target's declared range; units come
+from the target spec. `value < low_below` is `LOW`, `value > high_above` is
+`HIGH`, and everything between — **inclusive of both boundaries** — is the
+neutral region.
+
+`require_interval_inside_band` (default `true`) additionally requires the
+whole Milestone 7 prediction interval to lie in one region before that
+region's state is used; an interval straddling a boundary reads as neutral.
+That is a use of the interval's *width* as a deadband, not a re-derivation of
+Milestone 7's acceptance rule, which the policy never recomputes.
+
+**Consequence:** The continuous path is ready and its boundary behaviour is
+tested, but no number in it was chosen by looking at synthetic output, and
+turning it on is an explicit act that requires stating a scale.
+
+---
+
+### DEC-080: The Experimenter Lock and the Static Condition Are Different Things
+
+**Date:** 2026-08-19
+**Status:** Accepted
+
+**Context:** The project plan requires both "experimenter can disable
+adaptation" and "static and adaptive modes are clearly separated". One boolean
+could serve both.
+
+**Decision:** Two settings, two hold reasons, both recorded on every decision.
+
+- `adaptation.enabled` is the **experimenter lock**: hold every window
+  regardless of evidence. Reason: `adaptation_disabled`.
+- `adaptation.experiment_mode` is the **experimental condition**, `static` or
+  `adaptive`. Reason: `static_experiment_mode`.
+
+A static condition that silently depended on the policy happening to propose
+nothing would not be a static condition — it would be an adaptive condition
+that produced no adaptations, which is a different thing and would be analysed
+differently. The mode participates in the configuration fingerprint, so a
+static run and an adaptive run get different run ids and cannot be confused in
+the artifact directory.
+
+**Consequence:** A static-versus-adaptive experimental design has the
+separation it needs at the software level. It does not have participants,
+approval, or any evidence of benefit, and Milestone 8 makes no claim that it
+does.
+
+---
+
+### DEC-081: The Adaptation Trace Carries No Wall Clock
+
+**Date:** 2026-08-19
+**Status:** Accepted
+
+**Context:** Every other run directory in this repository records timestamps
+in its tables. Doing the same here would have made the trace differ between
+two runs of one configuration, which turns a determinism check into a
+field-by-field comparison with timestamp exclusions.
+
+**Decision:** `adaptation_trace.parquet` has **no wall-clock column**. Every
+value in it is a function of the inputs, the configuration, and the initial
+state. Timestamps live in `adaptation_summary.json`, where they are
+provenance rather than data.
+
+Identifiers follow: `proposal_id` is a digest of the session, window, order,
+direction, current and proposed level, and the configuration fingerprint;
+`command_id` is derived from it; `run_id` is a digest of the configuration
+fingerprint, the evaluation mode, the input sequence's identity, and the
+package version. No clock and no random component participates in any of them.
+The command's `issued_at_utc` is supplied by the caller, because the policy
+reads no clock at all.
+
+**Consequence:** Two runs produce byte-identical Parquet, so the determinism
+requirement is checked with `sha256sum`. A deterministic `command_id` also
+means a retransmitted command is absorbed by the task client's existing
+idempotency rule instead of double-stepping the difficulty.
+
+---
+
+### DEC-082: Milestone 8's Metrics Describe a Controller, Not a Person
+
+**Date:** 2026-08-19
+**Status:** Accepted
+
+**Context:** An adaptation layer invites outcome language. "Adaptations per
+session", "reversal rate", and "action frequency" are one sentence away from
+"the policy stabilised engagement", and a synthetic run would supply the
+numbers to say it.
+
+**Decision:** Every reported quantity counts something the **software** did,
+and `AdaptationControllerMetrics` carries a note saying so that travels with
+any number lifted out of it. The schema validates that the counts reconcile —
+holds plus proposals equal evaluated windows, increases plus decreases equal
+proposals, eligible plus blocked equal evaluated windows, and proposals never
+exceed eligible windows — so an inconsistent summary cannot be written.
+
+Improved engagement, reduced cognitive load, learning improvement, comfort,
+therapeutic effect, and adaptation effectiveness are **not** reported, and a
+test asserts that no metric field name contains them.
+
+The optional comparison against a guard-free controller (dwell 1, no cooldown,
+no budget) is labelled a SOFTWARE CONTROLLER comparison. It shows that the
+temporal guards mechanically reduce action frequency and nothing else. The
+conservative policy was not tuned to win it, and neither controller is
+described as better.
+
+**Consequence:** Milestone 8 produces a defensible statement — the controller
+behaves as specified on a fixed input sequence — and no statement at all about
+whether adapting helps anyone. That question needs participants, and the
+completion wording says so.

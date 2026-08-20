@@ -31,6 +31,11 @@ so real sensors can be substituted later.
                                                     +------------------+
 ```
 
+The arrow from the adaptation layer to the task environment is the **design
+intent**, not the current behaviour. As of Milestone 8 the policy produces a
+proposal and, optionally, a command object; nothing dispatches it. See
+§6 and `docs/ADAPTIVE_ENVIRONMENT.md`.
+
 ## Layer Descriptions
 
 ### 1. Capture Layer (`src/engagevr/capture/`, `face/`, `head_pose/`)
@@ -267,13 +272,36 @@ See `docs/BASELINE_MODELS.md`, `docs/MODEL_EVALUATION.md`,
 
 ### 6. Adaptation Policy Layer (`src/engagevr/adaptation/`)
 
-Maps model outputs to environment-change commands with safety controls.
+Decides, for an **already-eligible** Milestone 7 prediction, whether a
+conservative environment change should be **proposed**. Implemented in
+Milestone 8.
 
-| Module | Responsibility |
-|--------|---------------|
-| `adaptation/policy.py` | Rule-based policy, confidence/quality gating |
-| `adaptation/safety.py` | Cooldown, hysteresis, max-change limits, experimenter lock |
-| `adaptation/logger.py` | Complete adaptation event log |
+| Module | Responsibility | Status |
+|--------|---------------|--------|
+| `adaptation/mapping.py` | The ordinal state-to-direction demonstration rule | Implemented (M8) |
+| `adaptation/policy.py` | Pure `evaluate_policy`; gate, evidence, mapping, dwell, cooldown, budget, bounds | Implemented (M8) |
+| `adaptation/command.py` | Pure proposal -> existing `set_difficulty` payload; sends nothing | Implemented (M8) |
+| `adaptation/lifecycle.py` | proposed / command_built / dispatched / acknowledged / applied | Implemented (M8) |
+| `adaptation/scenarios.py` | 15 deterministic controller scenarios | Implemented (M8) |
+| `adaptation/runner.py` | Offline simulation, trace Parquet, controller metrics | Implemented (M8) |
+
+**Boundary, enforced by imports.** `adaptation/policy.py` imports two schema
+modules and its own mapping table. It imports nothing from `engagevr.api`,
+`engagevr.transport`, `engagevr.task`, or `engagevr.training`, so it cannot
+send anything and cannot recompute a Milestone 7 confidence, threshold, or
+gate verdict. A test asserts this by parsing the module's AST.
+
+**The Milestone 7 gate cannot be bypassed.** A `BLOCKED`
+`AdaptationGateRecord` forces `HOLD`, and `AdaptationProposal` embeds both
+targets' gate records and refuses to validate unless both are `ELIGIBLE`.
+There is no override flag.
+
+**A policy decision is not a network message.** Milestone 8 builds command
+objects and stops; nothing here dispatches. Signal quality can never choose a
+direction and confidence can never scale a step.
+
+No adaptation rule here is validated with human participants. See
+`docs/ADAPTIVE_ENVIRONMENT.md`.
 
 ### 7. API Layer (`src/engagevr/api/`)
 
@@ -351,12 +379,19 @@ Streamlit multi-page dashboard for monitoring and analysis.
    Missing data is masked, not imputed with misleading defaults.
 4. **Predict:** Feature windows are passed to the ML layer. The model produces
    engagement and cognitive-load estimates with confidence scores. It may abstain.
-5. **Adapt:** The adaptation policy evaluates the prediction against confidence
-   and signal-quality thresholds. If criteria are met and cooldown has elapsed,
-   an adaptation command is issued.
-6. **Execute:** The command is sent to Unity (or the simulator) via WebSocket.
-7. **Log:** Every step is logged with full provenance for replay and analysis.
-8. **Display:** The dashboard shows live or replayed data with clear labels for
+5. **Gate (M7):** The selective layer decides whether the prediction may be
+   acted on at all, and records `eligible` or `blocked` with reasons.
+6. **Adapt (M8):** For an eligible prediction, the deterministic policy maps
+   the engagement and cognitive-load states to a direction, then applies the
+   dwell, cooldown, budget, and bounds guards. Most windows **hold**, which is
+   a normal outcome and not an error. An approved proposal is translated into
+   the existing `set_difficulty` payload.
+7. **Execute:** Sending that command to Unity or the simulator over the
+   Milestone 4 WebSocket bridge is **not automatic**. Milestone 8 constructs
+   commands and stops; no policy-derived command is dispatched.
+8. **Log:** Every step is logged with full provenance for replay and analysis.
+   Every policy evaluation -- hold or proposal -- becomes one auditable row.
+9. **Display:** The dashboard shows live or replayed data with clear labels for
    data source (live, public dataset, synthetic) and reliability.
 
 ## Technology Stack

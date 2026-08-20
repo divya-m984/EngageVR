@@ -19,10 +19,11 @@ Usage::
     uv run python -m engagevr personalization-train --mode scientific --folds 5
     uv run python -m engagevr uncertainty-demo --target engagement_class --folds 5
     uv run python -m engagevr uncertainty-train --mode scientific --folds 5
+    uv run python -m engagevr adaptation-demo --output artifacts/experiments/m8
 
 All outputs from the ``demo``, ``rppg-demo``, ``task-sim``, ``features-demo``,
-``baseline-demo``, ``fusion-demo``, ``personalization-demo``, and
-``uncertainty-demo`` commands are
+``baseline-demo``, ``fusion-demo``, ``personalization-demo``,
+``uncertainty-demo``, and ``adaptation-demo`` commands are
 deterministic SYNTHETIC data.  Capture
 outputs are behavioural proxies, NOT engagement, psychological, clinical, or
 diagnostic conclusions.  rPPG heart rates are signal-processing estimates, NOT
@@ -151,11 +152,13 @@ def _build_parser() -> argparse.ArgumentParser:
     from engagevr.cli_milestone5 import add_parsers as add_milestone5_parsers
     from engagevr.cli_milestone6 import add_parsers as add_milestone6_parsers
     from engagevr.cli_milestone7 import add_parsers as add_milestone7_parsers
+    from engagevr.cli_milestone8 import add_parsers as add_milestone8_parsers
 
     add_parsers(sub)
     add_milestone5_parsers(sub)
     add_milestone6_parsers(sub)
     add_milestone7_parsers(sub)
+    add_milestone8_parsers(sub)
     return parser
 
 
@@ -722,6 +725,11 @@ def main(argv: list[str] | None = None) -> int:
             "uncertainty-train": cli_milestone7.run_uncertainty_train,
         }
         return milestone7[args.command](args)
+
+    if args.command == "adaptation-demo":
+        from engagevr import cli_milestone8
+
+        return cli_milestone8.run_adaptation_demo(args)
 
     if args.command in ("serve", "task-sim", "session-inspect", "session-replay"):
         from engagevr import cli_milestone4

@@ -634,3 +634,119 @@ Nothing in the uncertainty layer supports a medical, diagnostic, screening,
 monitoring, psychological, or clinical conclusion. A confidence score is
 not certainty, not psychological confidence, and not safety; an abstention
 is not a guarantee that anything harmful was avoided.
+
+---
+
+## Milestone 8: adaptive environment and the conservative adaptation policy
+
+### No human-subject evaluation of adaptation has taken place
+
+**No adaptation proposed by this policy has ever been shown to a person.**
+There is no study of whether the proposed changes are appropriate, welcome,
+noticeable, disruptive, or useful, and there is no approval for one. Nothing
+in Milestone 8 is evidence about any person.
+
+### The mapping is an engineering demonstration rule
+
+The rule that turns an estimated engagement and cognitive-load state into an
+adaptation direction is a small, transparent, deliberately conservative table
+derived from an example in the project specification. It is **not** a
+validated interpretation of human state, not psychologically validated, not
+pedagogically optimal, not therapeutic, and not demonstrated to benefit
+anyone. Seven of its nine cells hold.
+
+In particular the policy does **not** implement "low engagement, therefore
+make the task harder". The specification's own response to that state is
+feedback or stimulus variation, which the protocol cannot express, so the
+policy holds and says why (`no_expressible_action`) rather than substituting
+a difficulty change for the response that was actually named.
+
+### The policy consumes estimates whose validity is unestablished
+
+Every limitation of Milestones 5, 6, and 7 is inherited. No validated
+participant-labelled engagement study exists, no validated
+participant-labelled cognitive-load study exists, and no confidence value in
+this repository has been checked against a real outcome. A policy applied to
+an unvalidated estimate produces an unvalidated proposal.
+
+### Every temporal and structural default is unvalidated
+
+The dwell requirement (3 windows), the cooldown (6 windows), the difficulty
+bounds (`[1, 5]`), the step (1), and the session budget (10) are engineering
+defaults. None was selected by looking at a result, none is empirically
+optimal, and none is a production setting. The cooldown default corresponds to
+the specification's "at least 20-30 seconds" only at the default window
+cadence; nothing established that 30 s is the right interval for a person.
+
+### The controller has never run against real data
+
+It has been exercised only on 15 hand-written scenarios whose window states
+were chosen by the author to make specific branches run. It has never run
+against a live stream, a recorded session, or the output of a real Milestone 7
+run. The scenarios are **controller tests, not participant simulations**: they
+do not model a person, a task, a physiological process, or anyone's response
+to an adaptation.
+
+### The counterfactual comparison is a software comparison
+
+Running the same inputs through a guard-free controller shows that the
+temporal guards mechanically reduce how often the controller acts. It does not
+show that either controller is better, safer, or more useful for anyone, and
+the conservative policy was not tuned to win it.
+
+### Controller metrics are not outcome metrics
+
+Proposal counts, reversal counts, spacings, and streaks describe what the
+software did on a fixed input sequence. They are not engagement improvement,
+cognitive-load reduction, learning improvement, comfort, stability of a
+person's state, or adaptation effectiveness, and the metrics document carries
+a note saying so.
+
+### The action vocabulary is narrow
+
+The policy can only change task difficulty. `set_stimulus_interval` is unused,
+so it cannot vary pacing. `pause_task` and `resume_task` are unused, so it
+cannot trigger a break: the specification's only rule calling for one is a
+fatigue rule, and **no fatigue estimator exists in this repository**. Inferring
+fatigue from blink proxies or heart-rate estimates would be exactly the
+measurement-to-construct leap this project refuses.
+
+### Time is counted in windows, not seconds
+
+The dwell requirement and the cooldown are defined over policy-evaluation
+windows so that an offline replay is exactly reproducible. A stream whose
+window cadence differs from `windowing.model_inference_seconds` changes what
+they mean in wall-clock terms, and the policy has no way to detect that.
+
+### Nothing was dispatched, acknowledged, or applied
+
+Milestone 8 stops at a constructed command object. No policy-derived command
+has been sent, no task client has acknowledged one, and no environment has
+changed. A proposal is not an applied adaptation, and the lifecycle keeps
+`proposed`, `command_built`, `dispatched`, `acknowledged`, and `applied`
+distinct precisely so the two cannot be confused.
+
+### Signal quality still cannot choose a direction
+
+Quality reaches the policy only as Milestone 7 gate provenance and as a
+diagnostic field. There is no rule of the form "low quality -> reduce
+difficulty" and the schema makes one unrepresentable: a direction cannot be
+recorded without an ordinal state, and an ordinal state comes only from a
+declared-ordinal class label or an explicitly configured regression band. Poor
+signal quality holds; it never becomes an adaptation.
+
+### Not implemented in Milestone 8
+
+A learned or reinforcement-learning policy, autonomous dispatch, live
+integration with the Milestone 4 transport, stimulus-pacing or scene-content
+adaptation, break triggering, fatigue estimation, manual per-window override
+beyond the experimenter lock, dashboard pages, MLflow, DVC, Docker,
+CI/CD expansion, and deployment.
+
+### No safety, psychological, clinical, or effectiveness claim
+
+Nothing in the adaptation layer supports a medical, diagnostic, screening,
+monitoring, psychological, pedagogical, or clinical conclusion. A conservative
+policy is not a safe policy; conservatism here means the controller acts
+rarely, which is a mechanical property and not a statement about risk to a
+person.

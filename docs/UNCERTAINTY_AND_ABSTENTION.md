@@ -499,6 +499,33 @@ windows, and no transport client. A test parses the module's imports and
 asserts it imports nothing but two schema modules — so the claim is
 checkable rather than asserted. Adaptation policy is **Milestone 8**.
 
+### How Milestone 8 consumes this gate
+
+Milestone 8 (`src/engagevr/adaptation/`, `docs/ADAPTIVE_ENVIRONMENT.md`) is
+the layer that chooses. It treats this gate as a **hard prerequisite with no
+override**:
+
+- an `AdaptationGateRecord` with `decision = blocked` forces the policy to
+  `HOLD`;
+- the Milestone 7 reasons are preserved **verbatim, in this module's
+  canonical order**, on the Milestone 8 record. Milestone 8 may add its own
+  reason (`gate_blocked`, `prediction_abstained`, `prediction_unavailable`)
+  but never erases the underlying ones;
+- `AdaptationProposal` **embeds** the gate record of every target it used and
+  refuses to validate unless all are `eligible`, so a proposal's eligibility
+  is provable from the object rather than asserted by it;
+- Milestone 8 never recomputes `max(probabilities)`, never lowers a
+  threshold, never overrides a personalized or population threshold decision,
+  and never uses entropy or margin to turn a blocked window into an eligible
+  one. A test parses every Milestone 8 module and asserts that none
+  constructs an `AdaptationGateRecord` or calls `evaluate_adaptation_gate`.
+
+Milestone 8 also carries the same separation forward: signal quality reaches
+the policy only as this gate's provenance and as a diagnostic field, and no
+rule there can turn a quality value into an adaptation direction. Confidence
+decides whether a window may be acted on; it never scales how far the
+environment moves.
+
 ## Transport and online inference
 
 **No transport change was made and no new API route was added.** The
