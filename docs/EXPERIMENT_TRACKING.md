@@ -388,3 +388,88 @@ and no random component participates.
 
 Still no MLflow, no DVC, and no Docker. Tests assert that none appears in a
 fusion, a personalization, or an uncertainty run directory.
+
+---
+
+## Milestone 8: the adaptation run directory
+
+An offline adaptation-policy run writes a directory of its own. It is not a
+modelling run: it fits nothing, reads no dataset, splits no groups, and saves
+no estimator, so it carries no `RunManifest`, no `splits.json`, and no
+`models/`.
+
+```
+artifacts/experiments/<run-name>/
+    adaptation_policy_config.json   the resolved configuration and its fingerprint
+    scenarios.json                  what each scenario exercises
+    adaptation_trace.parquet        ONE ROW PER POLICY EVALUATION
+    adaptation_summary.json         controller metrics and provenance
+    checksums.json                  SHA-256 of every artifact above
+```
+
+`ADAPTATION_REQUIRED_ARTIFACTS` names the three a completed run must contain;
+a run missing one fails rather than reporting success.
+
+### `adaptation_trace.parquet`
+
+One row per policy evaluation — **holds included**, because a hold is a
+decision and the reason it was taken is exactly what an auditor needs. Columns
+cover the run, scenario, session, subject, and window references; the
+Milestone 7 gate decision **and its reasons** for both targets; both ordinal
+states and both predicted classes; each target's own suggested direction; the
+conflict flag and its resolution; the resolved direction; the pending
+direction, dwell count, and cooldown **before and after**; the current,
+requested, and proposed difficulty with a clamping flag; the decision kind and
+its policy reasons; the budget used and total; the proposal id; whether a
+command object was built and the lifecycle status it reached; the experiment
+mode; the configuration fingerprint; and the synthetic and
+scientific-eligibility flags.
+
+A reader of one row can answer, without re-running anything: was Milestone 7
+eligible; what each target contributed; what each suggested; whether they
+conflicted; whether the dwell requirement was satisfied; whether a cooldown
+was active; whether the state was in bounds; whether budget remained; what was
+decided; and, for a proposal, from what level to what level.
+
+**The trace carries no wall-clock column** (DEC-081). Every value in it is a
+function of the inputs, the configuration, and the initial state, so two runs
+of one configuration produce byte-identical Parquet and the determinism check
+is a checksum comparison. Timestamps live in the summary, where they are
+provenance rather than data.
+
+### `adaptation_summary.json`
+
+The resolved configuration, its fingerprint, the scenario names, the session
+ids, the controller metrics, and — when enabled — the guard-free controller
+comparison. Every disclaimer travels with the document: the self-check banner,
+the demonstration-rule note, the controller-metric note, the scenario note,
+and the comparison note. `AdaptationRunSummary` refuses to validate a
+self-check that omits the banner, a summary that omits the demonstration-rule
+note, or a synthetic run claiming scientific eligibility.
+
+### Adaptation run identity
+
+```
+adaptation-<selfcheck|sci>-<sha256(...)[:12]>
+```
+
+The hash covers the policy configuration fingerprint (every setting that can
+change a decision, excluding the prose notes), the evaluation mode, the
+identity of the input window sequence, and the EngageVR version. No wall clock
+and no random component participates, so re-running an identical run
+reproduces the identifier rather than accumulating near-duplicate directories,
+and a static run and an adaptive run necessarily get different ids.
+
+`proposal_id` and `command_id` are derived the same way, from the session,
+window, order, direction, current and proposed level, and the configuration
+fingerprint.
+
+### Privacy
+
+No raw frame, face crop, landmark, name, email, or secret appears in any
+adaptation artifact. The subject, session, and window references are the
+pseudonymous ones already present in the Milestone 5-7 artifacts. Tests assert
+that no trace column name contains a media or biometric term and that no JSON
+artifact contains an address or a credential.
+
+Still no MLflow, no DVC, and no Docker.

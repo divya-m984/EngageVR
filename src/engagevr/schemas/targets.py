@@ -103,6 +103,17 @@ class TargetSpec(BaseModel):
         default=None,
         description="Ordered class labels. Required for classification.",
     )
+    class_order_is_ordinal: bool = Field(
+        default=False,
+        description=(
+            "Whether ``class_vocabulary`` declares an ORDERED scale, so that "
+            "earlier entries are genuinely 'less' than later ones. Consumers "
+            "that need an ordering must require this flag rather than reading "
+            "one out of array position or alphabetical order: a nominal "
+            "vocabulary listed in some arbitrary order would otherwise acquire "
+            "an ordinal meaning it never had."
+        ),
+    )
     value_minimum: float | None = Field(
         default=None, description="Inclusive lower bound. Required for regression."
     )
@@ -122,6 +133,10 @@ class TargetSpec(BaseModel):
                     f"target {self.target_name.value!r} is a classification target "
                     "and must declare a class_vocabulary"
                 )
+            if self.class_order_is_ordinal and len(self.class_vocabulary) < 2:
+                raise ValueError(
+                    "a single-class vocabulary declares no order to be ordinal about"
+                )
             if len(set(self.class_vocabulary)) != len(self.class_vocabulary):
                 raise ValueError("class_vocabulary must not contain duplicates")
             if self.value_minimum is not None or self.value_maximum is not None:
@@ -133,6 +148,8 @@ class TargetSpec(BaseModel):
                 raise ValueError(
                     "a regression target must not declare a class_vocabulary"
                 )
+            if self.class_order_is_ordinal:
+                raise ValueError("a regression target has no class vocabulary to order")
             if self.value_minimum is None or self.value_maximum is None:
                 raise ValueError(
                     f"target {self.target_name.value!r} is a regression target and "
@@ -153,6 +170,7 @@ TARGET_SPECS: dict[TargetName, TargetSpec] = {
             "label source; this repository has none."
         ),
         class_vocabulary=ENGAGEMENT_CLASSES,
+        class_order_is_ordinal=True,
         unit="class",
     ),
     TargetName.ENGAGEMENT_SCORE: TargetSpec(
@@ -173,6 +191,7 @@ TARGET_SPECS: dict[TargetName, TargetSpec] = {
             "external label source; this repository has none."
         ),
         class_vocabulary=COGNITIVE_LOAD_CLASSES,
+        class_order_is_ordinal=True,
         unit="class",
     ),
     TargetName.COGNITIVE_LOAD_SCORE: TargetSpec(

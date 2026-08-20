@@ -20,6 +20,14 @@ from engagevr.protocol.version import (
     ProtocolVersionError,
     parse_protocol_version,
 )
+from engagevr.schemas.adaptation_policy import (
+    AdaptationPolicyConfiguration,
+    AdaptationPolicyMode,
+    ConflictResolution,
+    DifficultyBounds,
+    ExperimentMode,
+    RegressionBand,
+)
 from engagevr.schemas.fusion import (
     FusionConfiguration,
     FusionModality,
@@ -373,12 +381,211 @@ class ModelConfig(BaseModel):
     abstain_below_confidence: float = 0.3
 
 
+class DifficultyBoundsSettings(BaseModel):
+    """The legal difficulty range and the step one proposal moves.
+
+    ``minimum`` is 1 rather than 0 because that is the level the task
+    client and the simulator start at (``task.default_difficulty``), and
+    ``maximum`` is 5 as an ENGINEERING DEFAULT: the reaction task has no
+    empirically established ceiling, and this one was chosen to give the
+    policy room to move, not because five levels were measured to be
+    right.
+    """
+
+    minimum: int = Field(default=1, ge=0)
+    maximum: int = Field(default=5, ge=0)
+    step: int = Field(
+        default=1,
+        gt=0,
+        description=(
+            "Levels moved per proposal. A configured constant, never scaled "
+            "by model confidence."
+        ),
+    )
+
+
+class RegressionBandSettings(BaseModel):
+    """Explicit low/high boundaries for one regression target.
+
+    Both default to ``null``.  A default boundary would be an invented
+    threshold on a scale this repository has never measured, so enabling
+    regression mapping without stating both is a configuration error
+    rather than a silent fallback.
+    """
+
+    low_below: float | None = None
+    high_above: float | None = None
+
+
+class AdaptationRegressionMappingSettings(BaseModel):
+    """Whether continuous estimates may drive the policy, and how.
+
+    Disabled by default.  The project's ordinal classification targets
+    already carry a neutral class that acts as a deadband, so the first
+    policy reads those and nothing is forced into a continuous form for
+    symmetry.
+    """
+
+    enabled: bool = False
+    require_interval_inside_band: bool = True
+    engagement_score: RegressionBandSettings = Field(
+        default_factory=RegressionBandSettings
+    )
+    cognitive_load_score: RegressionBandSettings = Field(
+        default_factory=RegressionBandSettings
+    )
+
+
+class AdaptationPolicySettings(BaseModel):
+    """Milestone 8 policy defaults.
+
+    Every value here is an ENGINEERING DEFAULT.  None was selected by
+    looking at a result, none is empirically optimal, none is validated,
+    and none is a production setting.  The confidence and signal-quality
+    thresholds that once lived in this section are gone: Milestone 7 owns
+    them, and a second copy here would be a second gate that could
+    disagree with the first.
+    """
+
+    mode: str = "conservative_rule_based"
+    minimum_persistence_windows: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "Consecutive supporting windows before a proposal. At the default "
+            "windowing.model_inference_seconds of 5 s this is 15 s of "
+            "persistent evidence, which implements the specification's "
+            "'minimum observation window' safety control."
+        ),
+    )
+    cooldown_windows: int = Field(
+        default=6,
+        ge=0,
+        description=(
+            "Windows blocked after a proposal. At the default "
+            "windowing.model_inference_seconds of 5 s, 6 windows is the 30 s "
+            "the specification asks for. Counted in windows rather than "
+            "seconds so an offline replay is exactly reproducible."
+        ),
+    )
+    max_adaptations_per_session: int | None = Field(
+        default=10,
+        ge=0,
+        description="Proposals permitted per session. null means unlimited.",
+    )
+    conflict_resolution: str = "hold"
+    difficulty: DifficultyBoundsSettings = Field(
+        default_factory=DifficultyBoundsSettings
+    )
+    regression_mapping: AdaptationRegressionMappingSettings = Field(
+        default_factory=AdaptationRegressionMappingSettings
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        valid_modes = sorted(m.value for m in AdaptationPolicyMode)
+        if self.mode not in valid_modes:
+            raise ValueError(
+                f"adaptation.policy.mode names {self.mode!r}, which is not an "
+                f"implemented policy; valid: {valid_modes}. Milestone 8 "
+                "implements a deterministic rule, not a learned policy"
+            )
+        valid_resolutions = sorted(r.value for r in ConflictResolution)
+        if self.conflict_resolution not in valid_resolutions:
+            raise ValueError(
+                "adaptation.policy.conflict_resolution names "
+                f"{self.conflict_resolution!r}; valid: {valid_resolutions}. "
+                "There is deliberately no 'prefer_increase': conflicting "
+                "evidence never resolves toward the more demanding state"
+            )
+        return self
+
+    def resolve(
+        self,
+        *,
+        enabled: bool,
+        experiment_mode: str,
+    ) -> AdaptationPolicyConfiguration:
+        """Build the validated, frozen policy configuration."""
+        from engagevr.schemas.targets import TargetName, get_target_spec
+
+        bands: list[RegressionBand] = []
+        if self.regression_mapping.enabled:
+            pairs = (
+                (TargetName.ENGAGEMENT_SCORE, self.regression_mapping.engagement_score),
+                (
+                    TargetName.COGNITIVE_LOAD_SCORE,
+                    self.regression_mapping.cognitive_load_score,
+                ),
+            )
+            for target_name, settings in pairs:
+                if settings.low_below is None or settings.high_above is None:
+                    raise ValueError(
+                        "adaptation.policy.regression_mapping is enabled but "
+                        f"the band for {target_name.value!r} is incomplete; "
+                        "low_below and high_above must both be stated, because "
+                        "a default boundary would be an invented threshold on "
+                        "a scale this repository has not measured"
+                    )
+                bands.append(
+                    RegressionBand(
+                        target_name=target_name,
+                        low_below=settings.low_below,
+                        high_above=settings.high_above,
+                        unit=get_target_spec(target_name).unit,
+                    )
+                )
+
+        return AdaptationPolicyConfiguration(
+            enabled=enabled,
+            experiment_mode=ExperimentMode(experiment_mode),
+            mode=AdaptationPolicyMode(self.mode),
+            minimum_persistence_windows=self.minimum_persistence_windows,
+            cooldown_windows=self.cooldown_windows,
+            difficulty=DifficultyBounds(
+                minimum=self.difficulty.minimum,
+                maximum=self.difficulty.maximum,
+                step=self.difficulty.step,
+            ),
+            max_adaptations_per_session=self.max_adaptations_per_session,
+            conflict_resolution=ConflictResolution(self.conflict_resolution),
+            regression_mapping_enabled=self.regression_mapping.enabled,
+            regression_bands=tuple(bands),
+            require_interval_inside_band=(
+                self.regression_mapping.require_interval_inside_band
+            ),
+        )
+
+
 class AdaptationConfig(BaseModel):
+    """Adaptation-layer settings (Milestone 8).
+
+    ``enabled`` is the experimenter lock: when it is false the policy
+    holds every window regardless of the evidence.  ``experiment_mode``
+    is the separate static-versus-adaptive experimental condition, kept
+    distinct from the lock so that a static condition is a condition
+    rather than a policy that happened to propose nothing.
+    """
+
     enabled: bool = True
-    cooldown_seconds: float = 30.0
-    max_difficulty_change: int = 1
-    require_min_signal_quality: float = 0.4
-    require_min_confidence: float = 0.4
+    experiment_mode: str = "adaptive"
+    policy: AdaptationPolicySettings = Field(default_factory=AdaptationPolicySettings)
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        valid = sorted(m.value for m in ExperimentMode)
+        if self.experiment_mode not in valid:
+            raise ValueError(
+                f"adaptation.experiment_mode names {self.experiment_mode!r}; "
+                f"valid: {valid}"
+            )
+        return self
+
+    def resolve(self) -> AdaptationPolicyConfiguration:
+        """Build the validated, frozen policy configuration."""
+        return self.policy.resolve(
+            enabled=self.enabled, experiment_mode=self.experiment_mode
+        )
 
 
 class LoggingConfig(BaseModel):
@@ -1507,6 +1714,32 @@ class EngageVRConfig(BaseModel):
 
     # Milestone 7
     uncertainty: UncertaintyConfig = Field(default_factory=UncertaintyConfig)
+
+    @model_validator(mode="after")
+    def _check_adaptation_agrees_with_task(self) -> Self:
+        """The policy's difficulty range must contain the task's own level.
+
+        The adaptation bounds and the task's starting difficulty are set in
+        two different configuration sections, and a policy whose range
+        excludes the level the task actually starts at would refuse every
+        window with an out-of-bounds error at run time rather than at load
+        time.
+        """
+        bounds = self.adaptation.policy.difficulty
+        if bounds.minimum > bounds.maximum:
+            raise ValueError(
+                f"adaptation.policy.difficulty.minimum ({bounds.minimum}) "
+                f"exceeds maximum ({bounds.maximum})"
+            )
+        start = self.task.default_difficulty
+        if not bounds.minimum <= start <= bounds.maximum:
+            raise ValueError(
+                f"task.default_difficulty ({start}) lies outside "
+                f"adaptation.policy.difficulty [{bounds.minimum}, "
+                f"{bounds.maximum}]. The policy would refuse every window "
+                "because the environment starts at a level it considers illegal"
+            )
+        return self
 
     @classmethod
     def from_yaml(cls, path: str | Path | None = None) -> Self:

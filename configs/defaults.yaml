@@ -97,12 +97,74 @@ model:
   confidence_threshold: 0.5
   abstain_below_confidence: 0.3
 
+# Milestone 8: the conservative adaptation policy.
+#
+# Every value below is an ENGINEERING DEFAULT. None was selected by looking
+# at a result, none is empirically optimal, none is validated, and none is a
+# production setting. The mapping from an estimated state to an adaptation
+# direction is an ENGINEERING DEMONSTRATION RULE that has never been
+# evaluated with human participants. See docs/ADAPTIVE_ENVIRONMENT.md.
+#
+# There is no confidence or signal-quality threshold in this section.
+# Milestone 7 owns both (see `uncertainty:` below); a second copy here
+# would be a second gate that could disagree with the first.
 adaptation:
+  # The experimenter lock. When false the policy holds every window
+  # regardless of the evidence.
   enabled: true
-  cooldown_seconds: 30.0
-  max_difficulty_change: 1
-  require_min_signal_quality: 0.4
-  require_min_confidence: 0.4
+
+  # The static-versus-adaptive experimental condition, kept separate from
+  # the lock so a static condition is a condition rather than a policy that
+  # happened to propose nothing. One of: static, adaptive.
+  experiment_mode: "adaptive"
+
+  policy:
+    mode: "conservative_rule_based"
+
+    # Consecutive supporting windows before a proposal. At the default
+    # windowing.model_inference_seconds of 5 s this is 15 s of persistent
+    # evidence -- the specification's "minimum observation window".
+    minimum_persistence_windows: 3
+
+    # Windows blocked after a proposal. At 5 s per window this is the 30 s
+    # the specification asks for. Counted in windows rather than seconds so
+    # that an offline replay is exactly reproducible.
+    cooldown_windows: 6
+
+    # Proposals permitted per session. null means unlimited.
+    max_adaptations_per_session: 10
+
+    # What to do when engagement and cognitive load suggest opposite
+    # directions. One of: hold, prefer_decrease. There is deliberately no
+    # prefer_increase.
+    conflict_resolution: "hold"
+
+    difficulty:
+      # minimum matches task.default_difficulty, which is where the task
+      # client and the simulator start. maximum is an engineering default:
+      # the reaction task has no measured ceiling.
+      minimum: 1
+      maximum: 5
+      # Levels moved per proposal. A constant, never scaled by confidence.
+      step: 1
+
+    regression_mapping:
+      # Disabled: the ordinal classification targets already carry a
+      # neutral class that acts as a deadband, and nothing is forced into a
+      # continuous form for symmetry.
+      enabled: false
+      # When enabled, require the whole Milestone 7 prediction interval to
+      # fall inside one band before that band's state is used.
+      require_interval_inside_band: true
+      # No default boundary exists: one would be an invented threshold on a
+      # scale this repository has never measured. Enabling the mapping
+      # without stating both is a configuration error.
+      engagement_score:
+        low_below: null
+        high_above: null
+      cognitive_load_score:
+        low_below: null
+        high_above: null
 
 logging:
   level: "INFO"

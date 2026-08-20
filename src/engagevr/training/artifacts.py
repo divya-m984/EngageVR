@@ -188,7 +188,7 @@ class ExperimentRun:
     def write_json(self, name: str, data: dict[str, Any]) -> Path:
         """Write a JSON artifact atomically."""
         path = self.directory / name
-        _write_json_atomic(path, data)
+        write_json_atomic(path, data)
         self._record(name)
         return path
 
@@ -256,16 +256,22 @@ class ExperimentRun:
                     f"missing required artifact(s): {list(missing)}"
                 )
         checksums = self.compute_checksums()
-        _write_json_atomic(self.directory / "checksums.json", checksums)
+        write_json_atomic(self.directory / "checksums.json", checksums)
         final = manifest.model_copy(update={"artifact_checksums": checksums})
         path = self.directory / "manifest.json"
-        _write_json_atomic(path, final.model_dump(mode="json"))
+        write_json_atomic(path, final.model_dump(mode="json"))
         self._record("checksums.json")
         self._record("manifest.json")
         return path
 
 
-def _write_json_atomic(path: Path, data: dict[str, Any]) -> Path:
+def write_json_atomic(path: Path, data: dict[str, Any]) -> Path:
+    """Write ``data`` to ``path`` via a temporary file and an atomic rename.
+
+    Shared so that every run directory in the repository is written the
+    same way: a reader never sees a half-written document, and an
+    interrupted run leaves no file rather than a truncated one.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
     text = json.dumps(data, indent=2, default=str, sort_keys=False) + "\n"

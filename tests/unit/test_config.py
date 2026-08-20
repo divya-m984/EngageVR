@@ -24,8 +24,20 @@ class TestConfigDefaults:
 
     def test_default_adaptation(self):
         cfg = load_config()
-        assert cfg.adaptation.cooldown_seconds == 30.0
         assert cfg.adaptation.enabled is True
+        assert cfg.adaptation.experiment_mode == "adaptive"
+        assert cfg.adaptation.policy.cooldown_windows == 6
+        assert cfg.adaptation.policy.minimum_persistence_windows == 3
+
+    def test_adaptation_carries_no_second_confidence_gate(self):
+        # Milestone 7 owns the confidence and signal-quality thresholds. A
+        # second copy under `adaptation:` would be a second gate that could
+        # disagree with the first.
+        cfg = load_config()
+        names = set(type(cfg.adaptation).model_fields) | set(
+            type(cfg.adaptation.policy).model_fields
+        )
+        assert not [n for n in names if "confidence" in n or "quality" in n]
 
     def test_signal_quality_thresholds(self):
         cfg = load_config()
@@ -55,7 +67,7 @@ class TestConfigFromYaml:
         assert cfg.project.name == "TestProject"
         assert cfg.capture.webcam_fps_target == 15
         # Unspecified sections get defaults
-        assert cfg.adaptation.cooldown_seconds == 30.0
+        assert cfg.adaptation.policy.cooldown_windows == 6
 
     def test_missing_file_returns_defaults(self, tmp_path: Path):
         cfg = load_config(tmp_path / "nonexistent.yaml")
@@ -72,12 +84,14 @@ class TestConfigFromYaml:
         yaml_file.write_text(
             textwrap.dedent("""\
             adaptation:
-              cooldown_seconds: 60.0
+              policy:
+                cooldown_windows: 12
             """)
         )
         cfg = load_config(yaml_file)
-        assert cfg.adaptation.cooldown_seconds == 60.0
+        assert cfg.adaptation.policy.cooldown_windows == 12
         assert cfg.adaptation.enabled is True  # default preserved
+        assert cfg.adaptation.policy.minimum_persistence_windows == 3
 
 
 class TestConfigValidation:

@@ -8,9 +8,8 @@
 
 ## Status
 
-**Milestone 7 uncertainty-aware inference implementation complete;
-scientific calibration and selective-prediction evaluation on real
-participant-labelled data pending.**
+**Milestone 8 adaptive-environment implementation complete; human-subject
+evaluation of adaptation appropriateness, usability, and benefit pending.**
 
 Implemented: webcam capture, face landmarks (MediaPipe), behavioural proxy
 features, capture quality, a classical rPPG pipeline (GREEN / CHROM / POS,
@@ -26,17 +25,29 @@ feature-group ablations, local experiment records, and — new in Milestone
 quality-aware fusion, modality-specific experts, leakage-safe stacking,
 missing-modality robustness scenarios, expert-disagreement diagnostics,
 and personalized calibration reported separately from a population
-baseline.
+baseline; Milestone 7 — calibrated confidence, split-conformal prediction
+intervals, selective prediction with seven abstention reason codes, an
+evidence gate, population and label-free personalized thresholds,
+coverage and risk-coverage curves, and a confidence-aware adaptation
+**gate**; and — new in Milestone 8 — a conservative, deterministic
+adaptation **policy**: an ordinal state-to-direction demonstration rule,
+conservative conflict resolution, a dwell requirement, a cooldown, session
+adaptation bounds and budget, an explicit session-scoped policy state, a
+pure proposal-to-command builder that sends nothing, and 15 deterministic
+controller scenarios.
 
-Not implemented: uncertainty-aware abstention, selective prediction,
-personalized confidence thresholds, online inference, adaptation *policy*
-(Milestone 4 implements command **transport** only), HRV, Streamlit,
-MLflow, DVC, Docker, deep learning. No deep or neural fusion exists in this
-repository, and no per-subject model is trained from scratch.
+Not implemented: online inference, autonomous dispatch of a policy-derived
+command, a learned or reinforcement-learning policy, stimulus-pacing or
+scene-content adaptation, break triggering, fatigue estimation, HRV,
+Streamlit, MLflow, DVC, Docker, deep learning. No deep or neural fusion
+exists in this repository, and no per-subject model is trained from
+scratch.
 
 Pending validation: **Unity compilation and runtime** (no Unity Editor is
-installed here), **physical-webcam capture**, **UBFC-rPPG evaluation**, and
-**any evaluation on real participant labels** — none exist.
+installed here), **physical-webcam capture**, **UBFC-rPPG evaluation**,
+**any evaluation on real participant labels** — none exist — and **any
+human-subject evaluation of adaptation**. No adaptation proposed by this
+policy has ever been shown to a person.
 
 > **rPPG heart-rate values are signal-processing estimates from camera
 > data.** They are not medical measurements, have not been validated
@@ -270,10 +281,11 @@ The source recording is opened read-only and is never modified. See
 
 ### Adaptation
 
-Milestone 4 implements command **transport** only — there is no policy, no
-cooldown, no hysteresis, and no personalization. Commands are issued
+Milestone 4 implements command **transport** only. Commands here are issued
 manually or by a test script, and nothing claims that applying one improves
-engagement or any other outcome.
+engagement or any other outcome. The Milestone 8 *policy* that decides
+whether to propose one is separate and dispatches nothing — see
+[Adaptive Environment](#adaptive-environment-milestone-8) below.
 
 ### Unity desktop task
 
@@ -612,13 +624,155 @@ The gate answers only *"may an already-chosen action be acted upon?"*. It
 cannot choose an action, set a difficulty, address a scene, send a message,
 learn, or hold state between windows — `adaptation_gate.py` imports nothing
 but two schema modules, and a test asserts that by parsing its AST.
-Adaptation policy is Milestone 8.
+Adaptation policy is Milestone 8, below, and it treats this gate as a hard
+prerequisite with **no override**.
 
 **No confidence value, threshold, curve, or interval here is validated.** A
 synthetic coverage curve describes this repository's generator; it is not
 evidence of real-world calibration, reliability, safety, or usefulness.
 
 See [Uncertainty and Abstention](docs/UNCERTAINTY_AND_ABSTENTION.md).
+
+## Adaptive Environment (Milestone 8)
+
+```bash
+# The whole deterministic controller-scenario suite
+uv run python -m engagevr adaptation-demo \
+  --output artifacts/experiments/m8-adaptation-demo
+
+# One scenario, and what each scenario exercises
+uv run python -m engagevr adaptation-demo --scenario direction-reversal
+uv run python -m engagevr adaptation-demo --list-scenarios
+
+# The two experimenter controls
+uv run python -m engagevr adaptation-demo --experiment-mode static
+uv run python -m engagevr adaptation-demo --disable-adaptation
+```
+
+This starts no server, opens no socket, and **sends nothing.**
+
+### What the policy is
+
+Given an **eligible** Milestone 7 prediction and the current task state, it
+decides whether a conservative adaptation should be **proposed**. That is the
+whole of it. It does not retrain a model, recalibrate a probability, redefine
+uncertainty, or change the fusion layer.
+
+| Milestone | Question |
+|---|---|
+| M5 / M6 | What is the estimated state? |
+| M7 | Is there enough evidence and confidence to act on it at all? |
+| **M8** | **Should a conservative change be proposed?** |
+| M4 | How does an explicit command reach a task client? |
+
+### The Milestone 7 gate cannot be bypassed
+
+A `blocked` gate forces `HOLD`. **There is no override flag.** The dependency
+is enforced three times over: in control flow; in `AdaptationProposal`, which
+embeds both targets' gate records and refuses to validate unless both are
+`eligible`; and in `AdaptationPolicyDecision`. Milestone 7's reasons are
+preserved verbatim, in Milestone 7's canonical order. Milestone 8 never
+recomputes `max(probabilities)`, never lowers a threshold, and never uses
+entropy or margin to make a blocked window eligible.
+
+### The mapping is an engineering demonstration rule
+
+Two principles and a default, not nine independent choices. **P1, overload
+protection:** high cognitive load suggests a decrease. **P2, engagement
+headroom:** high engagement suggests an increase, and one is proposed only
+when cognitive load is affirmatively *low*. **P3:** everything else holds.
+
+| engagement \ cognitive load | low | medium | high |
+|---|---|---|---|
+| **low** | hold | hold | **decrease** |
+| **medium** | hold | hold *(deadband)* | **decrease** |
+| **high** | **increase** | hold | hold *(conflict)* |
+
+Seven of nine cells hold. The policy deliberately does **not** implement "low
+engagement, therefore make it harder": the specification's own response to
+that state is feedback or stimulus variation, which the protocol cannot
+express, so the policy holds and says why. It never issues `pause_task`
+either — the only rule that would call for a break is a fatigue rule, and no
+fatigue estimator exists here.
+
+**This is not a validated interpretation of human state.**
+
+### HOLD is a first-class decision
+
+Holds are normal and common. Each states at least one of 20 exact reason
+codes in a canonical order, and carries **no proposal and therefore no command
+payload**. A proposal carries exactly `proposal_eligible` and nothing else;
+the schema refuses any other combination.
+
+### Guards
+
+| Guard | Default | Notes |
+|---|---|---|
+| dwell (persistence) | 3 consecutive supporting windows | a hold **resets** the count, it does not decay it; a blocked window never counts as evidence |
+| cooldown | 6 windows | counted in windows, not seconds, so a replay is reproducible; minimum spacing 7 windows |
+| difficulty bounds | `[1, 5]`, step 1 | at a bound the policy **holds**; clamping, if any, is recorded with both values |
+| session budget | 10 proposals | `null` means unlimited |
+| conflict | `hold` | there is deliberately no `prefer_increase` |
+
+**Hysteresis is emergent** from the deadband, the dwell reset, the direction
+change reset, and the cooldown. No redundant knob exists, and a test asserts
+that none does.
+
+**Confidence never scales the step.** It decided, in Milestone 7, whether the
+window may be acted on at all; reusing it as a control gain would let a barely
+admissible estimate move the environment further than a clear one.
+`AdaptationProposal` carries no confidence field.
+
+**Signal quality can never choose a direction.** It reaches the policy only as
+Milestone 7 gate provenance and as a diagnostic. A direction cannot be
+recorded without an ordinal state, and an ordinal state comes only from a
+declared-ordinal class label or an explicitly configured regression band.
+
+### Proposal, command, dispatch, acknowledgement, applied
+
+Five different facts, never collapsed. Milestone 8 stops at
+`command_built`:
+
+```
+prediction -> M7 gate -> policy -> proposal -> command object
+                                        (Milestone 8 stops here)
+```
+
+The builder reuses the **existing** `set_difficulty` action — the protocol did
+not change — sets `is_manual=False`, and refuses holds, blocked gates,
+out-of-bounds levels, and non-task target roles. `--dispatch` exists only so
+that asking for live transport produces a stated refusal. Tests parse every
+module's AST and assert that none imports a transport module or calls `send`,
+`broadcast`, `publish`, or `dispatch`.
+
+`applied` cannot be recorded without a real Milestone 4 acknowledgement
+payload carrying the instant the client applied the change.
+
+### Experimenter controls
+
+`adaptation.enabled` is the **experimenter lock**. `adaptation.experiment_mode`
+is the separate **static vs adaptive experimental condition**. They are kept
+distinct so that a static condition is a condition rather than an adaptive
+policy that happened to propose nothing, and the mode participates in the run
+id.
+
+### What the demo produces
+
+`adaptation_trace.parquet` with **one row per policy evaluation, holds
+included**; `adaptation_summary.json` with controller metrics;
+`adaptation_policy_config.json`; `scenarios.json`; and `checksums.json`. The
+trace carries **no wall-clock column**, so two runs produce byte-identical
+Parquet and the determinism check is a checksum comparison.
+
+The metrics count what the software did: windows, holds, proposals,
+increases, decreases, hold reasons, reversals, proposal spacing, streaks, and
+blocked oscillation attempts. **They are not engagement improvement, cognitive
+load reduction, learning improvement, comfort, or adaptation effectiveness**,
+and none of them describes a person. The optional comparison against a
+guard-free controller shows only that the temporal guards reduce action
+frequency; it is not a claim that either controller is better for anyone.
+
+See [Adaptive Environment](docs/ADAPTIVE_ENVIRONMENT.md).
 
 ## Privacy
 
@@ -667,10 +821,13 @@ src/engagevr/         Python package
                       personalization algebra and runner (M6);
                       uncertainty algebra, uncertainty runner,
                       adaptation gate (M7)
+  adaptation/         Conservative adaptation POLICY: mapping, policy,
+                      command builder, lifecycle, scenarios, runner (M8)
   cli_milestone5.py   features-demo / baseline-demo / baseline-train
   cli_milestone6.py   fusion-demo / fusion-train /
                       personalization-demo / personalization-train
   cli_milestone7.py   uncertainty-demo / uncertainty-train
+  cli_milestone8.py   adaptation-demo
 configs/              YAML configuration files
 protocol/             Checked-in JSON Schema and contract fixtures (M4)
 scripts/              Model download, protocol-artefact generation
@@ -700,6 +857,7 @@ docs/                 Project documentation
 - [Experiment Tracking](docs/EXPERIMENT_TRACKING.md)
 - [Multimodal Fusion](docs/MULTIMODAL_FUSION.md)
 - [Uncertainty and Abstention](docs/UNCERTAINTY_AND_ABSTENTION.md)
+- [Adaptive Environment](docs/ADAPTIVE_ENVIRONMENT.md)
 
 ## Disclaimer
 
@@ -714,6 +872,10 @@ cognition, workload, or fatigue.
 No validated participant engagement or cognitive-load label exists in this
 project. Every model metric here was computed from SYNTHETIC data and is a
 software self-check, not evidence about any person.
+
+No adaptation rule in this repository is psychologically validated,
+pedagogically optimal, therapeutic, safe, or demonstrated to benefit any
+person, and no adaptation it proposes has ever been shown to anyone.
 
 ## License
 
