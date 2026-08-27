@@ -473,3 +473,29 @@ that no trace column name contains a media or biometric term and that no JSON
 artifact contains an address or a credential.
 
 Still no MLflow, no DVC, and no Docker.
+
+## Reading a run directory: the Milestone 9 dashboard
+
+Every run directory described in this document is inspectable through the
+local research dashboard:
+
+```bash
+uv run python -m engagevr dashboard
+uv run python -m engagevr dashboard-check --artifact-root artifacts/experiments
+```
+
+The dashboard is **read-only**. It discovers run directories, classifies each
+by **artifact signature** rather than by directory name, verifies recorded
+checksums on request, and renders what the JSON and Parquet documents say.
+It writes nothing, deletes nothing, re-runs nothing, and opens no
+`models/*.joblib` — those are Python pickles, and everything needed to judge
+a run is in the JSON documents beside them.
+
+It distinguishes `completed`, `failed`, `incomplete`, `corrupt`,
+`unsupported`, and `unknown`, so a directory that exists is never mistaken
+for a successful run, and a checksum mismatch is a visible error rather than
+a silent one.
+
+Still no MLflow, no DVC, and no Docker: those remain Milestone 10.
+
+See `docs/DASHBOARD.md`.

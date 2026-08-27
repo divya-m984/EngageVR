@@ -525,3 +525,30 @@ curve unavailable with a stated reason, on the same
 undefined-stays-null rule as every other metric here.
 
 See `docs/UNCERTAINTY_AND_ABSTENTION.md`.
+
+## Reading these metrics in the dashboard (Milestone 9)
+
+The metrics described here are rendered by the Milestone 9 dashboard's
+Baseline-models page, which is task-aware: a classification target gets
+accuracy, balanced accuracy, macro precision/recall/F1, weighted F1,
+calibration metrics, a confusion matrix, and a reliability diagram; a
+regression target gets MAE, RMSE, median absolute error, R², an
+observed-versus-predicted scatter, and residual views.
+
+Three properties carry over from this document into the display:
+
+- **A metric that was not computable renders as *Unavailable*, never as
+  zero.** A model whose folds all failed shows a column of *Unavailable*,
+  not a column that reads as the worst possible score.
+- **There is no champion.** Rows may be ordered by a metric; when they are,
+  the caption says *descriptive sorting only*, and no model, strategy, or
+  threshold is marked as best, winning, or recommended.
+- **A synthetic confusion matrix says `observed synthetic label`, not
+  `ground truth`.** This repository has no participant ground truth, and the
+  axis label is exactly where that would silently be claimed.
+
+The reliability diagram pools the calibration bins the run already recorded,
+weighted by window count. **No calibration model is fitted or refitted by
+the dashboard.**
+
+See `docs/DASHBOARD.md`.

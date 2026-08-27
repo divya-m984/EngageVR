@@ -1,10 +1,9 @@
 # EngageVR -- Progress Tracker
 
-## Current Milestone: 8 -- Adaptive Environment
+## Current Milestone: 9 -- Research Dashboard
 
-**Status:** Milestone 8 adaptive-environment implementation complete;
-human-subject evaluation of adaptation appropriateness, usability, and benefit
-pending.
+**Status:** Milestone 9 research dashboard implementation complete; scientific
+evaluation and human-subject validation remain pending.
 
 ## Milestone History
 
@@ -969,9 +968,220 @@ MLflow, or Docker.
 5. Unity compilation and runtime validation of the existing `set_difficulty`
    path.
 
-### Milestone 9: Dashboard
+### Milestone 9: Research Dashboard
 
-**Status:** Not started
+**Started:** 2026-08-22
+**Completed (implementation):** 2026-08-25 (artifact observatory 2026-08-22;
+live, replay, and session-report export 2026-08-25)
+
+**Status:** Milestone 9 research dashboard implementation complete; scientific
+evaluation and human-subject validation remain pending.
+
+**Objective:** A local, READ-ONLY research dashboard that makes the existing
+evidence, provenance, limitations, quality, uncertainty, selective-prediction
+behaviour, and adaptation-controller behaviour inspectable without changing
+their semantics.
+
+**Deliverables:**
+- [x] `src/engagevr/schemas/dashboard.py` -- typed presentation models with
+      structural invariants (`extra="forbid"`)
+- [x] `src/engagevr/dashboard/catalogue.py` -- artifact discovery, run-family
+      detection by signature, status, checksum verification
+- [x] `src/engagevr/dashboard/loaders.py` -- read-only JSON and Parquet access
+      with column selection
+- [x] `src/engagevr/dashboard/formatting.py` -- all display formatting;
+      `None` never becomes `0`
+- [x] `src/engagevr/dashboard/aggregation.py` -- display-only aggregates
+- [x] `src/engagevr/dashboard/presentation.py` -- terminology and limitations
+      as typed data
+- [x] `views_dataset.py`, `views_models.py`, `views_fusion.py`,
+      `views_uncertainty.py`, `views_adaptation.py` -- per-family view builders
+- [x] `components.py`, `pages.py`, `app.py` -- the Streamlit layer, ten pages
+- [x] `launch.py` + `cli_milestone9.py` -- `dashboard`, `dashboard-check`,
+      `dashboard-sessions`
+- [x] `dashboard:` section in `configs/defaults.yaml`
+- [x] `docs/DASHBOARD.md`
+
+**Live and replay modes (2026-08-25):**
+- [x] `src/engagevr/schemas/dashboard_session.py` -- typed session models,
+      the replay cursor, and the session report (`extra="forbid"`)
+- [x] `src/engagevr/dashboard/session_reader.py` -- tail-safe read-only
+      recording parser distinguishing five states
+- [x] `src/engagevr/dashboard/session_catalogue.py` -- session discovery,
+      status, and provenance, separate from the run catalogue (DEC-091)
+- [x] `src/engagevr/dashboard/views_session.py` -- live and replay view models
+- [x] `src/engagevr/dashboard/session_report.py` -- the pure, deterministic,
+      fingerprinted session report (DEC-093)
+- [x] `src/engagevr/dashboard/session_pages.py` -- the live and replay pages
+- [x] Three-way evidence-mode selector in `app.py` (DEC-090)
+- [x] `session_root`, `live_refresh_seconds`, `enable_session_report_export`
+      in `DashboardConfig` and `configs/defaults.yaml`
+- [x] 792 tests across 12 modules plus two shared fixture builders
+
+**Real-time refresh and provenance labelling (2026-08-27):**
+- [x] `views_session.live_refresh_interval` / `refresh_statement` /
+      `mode_headline` -- validated cadence and `Mode: LIVE OBSERVATION`
+      wording, framework-free
+- [x] `session_pages.live_session_page` wraps its body in
+      `st.fragment(run_every=...)` -- automatic refresh on the LIVE page
+      only, using a native Streamlit 1.62 mechanism; **no dependency added**
+      (DEC-094, revised)
+- [x] Replay does not auto-advance; the artifact observatory does not poll;
+      `run_every` occurs exactly once in the package, asserted by test
+- [x] A refused interval starts no timer, is never clamped, and states its
+      reason; the page and its manual control still render
+- [x] `presentation.data_source_label` / `data_source_statement` --
+      SYNTHETIC / PUBLIC / LIVE / MIXED / UNRECOGNISED / absent, rendered
+      beside the recorded value on every provenance surface (DEC-095)
+- [x] `views_session.data_source_table` and label columns on the session
+      provenance, session catalogue, and dataset-page tables
+- [x] `DashboardConfig.live_refresh_seconds` documented as a poll interval,
+      `allow_inf_nan=False`
+- [x] `tests/unit/test_dashboard_live_refresh.py` (57 tests) and
+      `tests/unit/test_dashboard_provenance_labels.py` (40 tests), the latter
+      building public and live provenance as **temporary fixtures**
+- [x] Dashboard suite now 889 tests, all passing under `-W error`
+
+**Framework and dependency:** Streamlit 1.62, already specified by
+`docs/PROJECT_PLAN.md` and `docs/PROJECT_SPECIFICATION.md`. **One** dependency
+added. Charts use Streamlit's native chart functions; no Plotly, Altair,
+matplotlib, or Bokeh is imported by this repository (DEC-085).
+
+**Pages:** Overview; Dataset and provenance; Signal and feature quality;
+Baseline models; Multimodal fusion; Personalization; Uncertainty and
+abstention; Adaptive environment; Run integrity; Limitations and scientific
+status.
+
+**Run families discovered from the local artifact root (26 directories):**
+
+| Family | Runs | Detection |
+|--------|------|-----------|
+| baseline | 2 | `manifest.json` + `metrics.json` + `splits.json`, no later marker |
+| fusion | 6 | `fusion_metrics.json` + `fusion_config.json` |
+| personalization | 6 | `personalization.json` + `personalization_config.json` |
+| uncertainty | 8 | `uncertainty.json` + `uncertainty_config.json` |
+| adaptation | 1 | `adaptation_summary.json` + `adaptation_policy_config.json` |
+| unknown | 2 | no signature matched (two empty directories) |
+
+Directory names took no part in any of those classifications (DEC-084).
+
+**Architectural boundary:** the layering
+`catalogue -> loaders -> views -> components -> pages -> app` is
+import-enforced. Nothing below `components.py` imports Streamlit, so the unit
+tests need no browser, socket, or server. AST tests assert that no dashboard
+module writes, deletes, retrains, recalibrates, dispatches, opens a model
+pickle, imports the transport or API layer, or touches Git.
+
+**Verification (2026-08-22):**
+- `uv lock --check`: LOCK OK; `uv sync --locked`: OK
+- `uv run ruff format --check .`: all files formatted
+- `uv run ruff check .`: All checks passed
+- `uv run mypy src`: Success, 136 source files
+- `uv run pytest`: **2861 passed, 1 skipped** (baseline 2352 passed, 1 skipped)
+- `uv run pytest -m hardware`: 1 skipped, 2861 deselected
+- `uv run pre-commit run --all-files`: all hooks Passed
+- protocol artifacts regenerated; `git diff --exit-code -- protocol/`: **no drift**
+- manual verification against the real ignored M5--M8 artifacts: PASSED
+- all ten pages rendered against the real artifact root via `AppTest`: OK
+
+**Manual verification findings:**
+- 26 runs discovered; 26/26 synthetic; 0/26 scientifically eligible
+- every completed run renders the software-self-check banner and states
+  `scientific_evaluation_eligible = false`
+- classification uncertainty uses `confidence_threshold`; regression uses
+  `maximum_interval_width`; neither view carries the other's fields
+- selective accounting reconciles: 548 accepted + 502 abstained + 0
+  unavailable = 1050 evaluated
+- adaptation: 19 proposals, 19 commands built, **0 dispatched, 0
+  acknowledged**
+- personalization: negative synthetic deltas retained on all six metrics
+  (accuracy, balanced accuracy, macro F1, macro precision, macro recall,
+  weighted F1)
+- pre-DEC-072 `m7-*` coverage curves refused with a stated reason
+- two empty directories reported as `unknown`, not guessed from their names
+- two scans of the artifact root produced identical catalogues; nothing
+  was modified
+
+**Acceptance criteria (software level):**
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | A local research dashboard exists | Met |
+| 2 | Discovers existing runs without mutating them | Met |
+| 3 | Baseline, fusion, personalization, uncertainty, adaptation inspectable | Met |
+| 4 | Every result-bearing view preserves synthetic/scientific provenance | Met |
+| 5 | Classification and regression uncertainty use different correct semantics | Met |
+| 6 | Signal quality, confidence, disagreement, uncertainty remain distinct | Met |
+| 7 | Personalization comparisons do not imply benefit | Met |
+| 8 | Adaptation views report controller behaviour, not human effectiveness | Met |
+| 9 | HOLD / proposal / command / dispatched / acknowledged remain distinct | Met |
+| 10 | Missing, corrupt, incomplete artifacts degrade explicitly | Met |
+| 11 | Artifact checksum/integrity status is inspectable | Met |
+| 12 | Read-only; cannot retrain or dispatch | Met |
+| 13 | Generated experiment artifacts remain Git-ignored | Met |
+| 14 | Existing M1--M8 software behaviour intact | Met |
+| 15 | No synthetic visualization becomes scientific evidence | Met |
+
+**Acceptance criteria (from `docs/PROJECT_PLAN.md`):**
+
+| Criterion | Status |
+|-----------|--------|
+| Dashboard runs locally | Met |
+| Synthetic, public, and live data are visually labelled | Met. Synthetic runs and records carry the software-self-check banner. Every recorded `data_source` is rendered as a word beside its raw value — `SYNTHETIC (recorded as 'synthetic')`, `PUBLIC (recorded as 'public_dataset')`, `LIVE (recorded as 'live')` — on the artifact banner, the session banner, both session tables and the dataset page, each with a statement that neither public nor live implies scientific eligibility (DEC-095). No public dataset and no genuinely live participant recording exists in this repository, so `test_dashboard_provenance_labels.py` builds all three as **temporary fixtures** and renders them through the real pages. Nothing is fabricated as data: the fixtures are structures with the right provenance fields and obviously synthetic contents, deleted with their temporary directory. |
+| Missing or unreliable measurements are visible | Met |
+| Session report can be reproduced | Met. `session_report.build_report` is a pure function with a content fingerprint that excludes export time; the same recording reported twice is byte-identical (DEC-093), and this is asserted by tests. |
+
+**Objective reconciliation (`docs/PROJECT_PLAN.md` §Milestone 9):**
+
+| Objective | Status |
+|-----------|--------|
+| Streamlit dashboard | Delivered (Streamlit 1.62, the one dependency added) |
+| All core monitoring pages | Delivered: ten artifact pages plus two session pages |
+| Real-time mode | Delivered as READ-ONLY live session observation that **refreshes automatically** every `dashboard.live_refresh_seconds` (default 5s, floor 2s) via `st.fragment(run_every=...)`, a native Streamlit 1.62 mechanism (DEC-090, DEC-094 revised). Each firing re-reads the recording with the read-only session reader, so an appended record appears without any user action; a manual control remains alongside. It runs no model, opens no camera, sends nothing, and produces no estimate on any cadence: **real-time observation, not real-time inference.** |
+| Replay mode | Delivered as READ-ONLY deterministic navigation through a recording (DEC-090). It re-runs no simulator, re-emits nothing, and does **not** auto-advance — its cursor moves only when one of its own controls is used. |
+| Signal-quality warnings | Delivered on the quality page; on the session pages, quality is stated *Unavailable* because a recording cannot carry it |
+| Uncertainty display | Delivered, classification and regression kept structurally disjoint |
+| Adaptation history | Delivered: controller behaviour on the artifact page, transported commands and replies on the session pages, with no effectiveness field anywhere |
+| Exportable session report | Delivered as JSON and Markdown, downloadable in the browser and printable from `dashboard-sessions`. No PDF dependency was added. |
+
+**Known limitations:**
+1. Every displayable run is synthetic; nothing on any page is evidence.
+2. The dashboard has never been used by anyone but its author; its usability
+   is unevaluated.
+3. Accessibility follows stated rules but is untested with assistive
+   technology.
+4. It reads the Milestone 5--8 artifact contracts as they stand today; a
+   contract change requires a dashboard change.
+5. Pre-DEC-072 uncertainty curves cannot be displayed at all.
+6. There is no authentication; the dashboard binds to loopback only.
+7. The live mode observes a *recording*, not a running process. It cannot
+   report that a session has stalled, only that no new record has appeared,
+   and it cannot tell a session still running from one that stopped without
+   writing a summary.
+8. The live mode has never been exercised against a session written by a
+   compiled Unity client, because Unity has never been compiled here. It has
+   been exercised against Python-simulator recordings and fixtures.
+9. The live refresh has a two-second floor and needs a browser tab open to
+   fire (DEC-094). It is a research view, not a wall display or a monitoring
+   service, and it reports nothing when nobody is looking.
+10. A session report is a presentation artifact. Two identical reports of a
+    synthetic recording are two identical statements about synthetic data.
+11. The provenance labelling for public and live sources has been exercised
+    only against temporary fixtures. No real public dataset and no real live
+    participant recording has ever passed through it.
+
+**Decisions recorded:** DEC-083 through DEC-095 (see `docs/DECISIONS.md`).
+DEC-090 supersedes the delivery conclusion of DEC-083. DEC-094 was revised
+on 2026-08-27: the live view now refreshes automatically at a conservative
+configured interval, where it previously refreshed only on request.
+
+**Remaining validation for this milestone:**
+1. Obtain a validated participant-labelled dataset, without which no page
+   here can become evidence.
+2. Human-subject evaluation of engagement, cognitive load, and adaptation.
+3. Usability evaluation with a researcher who did not write the dashboard.
+4. Accessibility testing with assistive technology.
+5. Live observation of a session written by a compiled Unity client.
 
 ### Milestone 10: MLOps and Packaging
 

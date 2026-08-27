@@ -552,3 +552,57 @@ uncertainty:
     # never sends a transport message, and has no cooldown, hysteresis, or
     # reward. Adaptation policy is Milestone 8.
     enabled: true
+
+# --- Milestone 9: research dashboard ---
+#
+# READ-ONLY RESEARCH OBSERVABILITY. Everything in this section controls
+# PRESENTATION and DISCOVERY. Nothing here can change a scientific
+# quantity, and the fields that would matter most if it could are
+# deliberately absent: scientific_evaluation_eligible, is_synthetic,
+# confidence thresholds, the adaptation mapping, and model outputs all
+# come from artifacts. A configuration file is not evidence, and no
+# dashboard control can mark a synthetic run as validated.
+dashboard:
+  # Directory scanned for candidate run directories. Repository-relative
+  # so this file stays portable. artifacts/ is gitignored.
+  artifact_root: "artifacts/experiments"
+
+  # Family the run selector starts on: baseline, fusion, personalization,
+  # uncertainty, adaptation, unknown, or null for every family.
+  default_run_family: null
+
+  # Compare each run's recorded SHA-256 with the bytes on disk. Switching
+  # this off does not make a mismatched run valid; it makes the integrity
+  # status "not checked", which is a different statement.
+  validate_checksums: true
+
+  # Rows one table renders before it states how many it dropped. The
+  # artifact on disk is never truncated; only the view is.
+  max_table_rows: 1000
+
+  # Whether pseudonymous subject identifiers appear in tables. They are
+  # software-generated labels, so this is an audit convenience rather
+  # than a privacy control: there is nothing personal in the artifacts.
+  show_subject_ids: true
+
+  # Bins used for every distribution chart on the dashboard.
+  histogram_bins: 20
+
+  # Directory scanned by the live-observation and replay modes. A
+  # recorded session is not an experiment run, so the two roots and the
+  # two catalogues are kept apart.
+  session_root: "artifacts/sessions"
+
+  # Seconds between two automatic re-reads on the LIVE OBSERVATION page.
+  # Only that page refreshes on a timer: replay never auto-advances and
+  # the experiment-artifact mode never polls. Must be finite and at least
+  # 2 seconds. What refreshes is a read-only view of records the session
+  # recorder already wrote; real-time observation is not real-time
+  # inference, and no model runs on any cadence.
+  live_refresh_seconds: 5.0
+
+  # Whether the live and replay pages offer the session-report download.
+  # Switching it off removes the control. It cannot change what a report
+  # contains: provenance, the disclaimer, and the software-self-check
+  # banner are required fields of the report model.
+  enable_session_report_export: true

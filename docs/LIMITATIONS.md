@@ -750,3 +750,131 @@ monitoring, psychological, pedagogical, or clinical conclusion. A conservative
 policy is not a safe policy; conservatism here means the controller acts
 rarely, which is a mechanical property and not a statement about risk to a
 person.
+
+---
+
+## Milestone 9: Research Dashboard
+
+### The dashboard displays evidence; it does not create any
+
+Every view reads an artifact a previous milestone wrote. Selecting,
+filtering, aggregating, or plotting a value does not change where it came
+from, and a view derived from a synthetic or scientifically ineligible
+artifact is itself synthetic and ineligible.
+
+Every run the dashboard can currently display is a **software self-check on
+synthetic data**. Nothing on any page is evidence about engagement,
+cognitive load, psychological state, health, safety, or adaptation benefit,
+and no control anywhere in the dashboard could make it so.
+
+### It is read-only, and that is structural
+
+The dashboard cannot retrain a model, recalibrate a probability, re-run a
+pipeline, dispatch an adaptation command, acknowledge a command, modify a
+manifest, delete a run, or perform a Git operation. AST tests over its own
+source assert the absence of every write, delete, fit, predict, calibrate,
+and dispatch call, and of every import of a runner, the transport layer, the
+API layer, `joblib`, `pickle`, and `sklearn`.
+
+It reads JSON and Parquet only. `models/*.joblib` are Python pickles, and
+loading one executes code contained in it; nothing needed to judge a run is
+inside an estimator, so no model file is ever opened.
+
+### Live mode observes a recording, not a person
+
+`docs/PROJECT_PLAN.md` requires "real-time and replay modes". Both are
+delivered as **read-only presentation modes** over recordings the Milestone
+4 session recorder already persisted (DEC-090, superseding the delivery
+conclusion of DEC-083).
+
+What that does **not** include is unchanged: no camera, no online inference,
+no model loading, no transport client, no simulator, and no replay
+transmitter. A live engagement readout beside a person's face would be a
+claim about that person that nothing in this repository supports, and there
+is no code path that could produce one — a session recording structurally
+cannot carry an engagement estimate, a cognitive-load estimate, a model
+confidence, a prediction interval, or an abstention. Each is stated as
+*Unavailable* with the reason rather than left blank.
+
+Specific limits of the live mode:
+
+- It observes a *file*, not a process. It cannot report that a session has
+  stalled, only that no new complete record has appeared since the previous
+  read, and it cannot distinguish a session still running from one that
+  stopped without writing a summary. Both are reported as *active or
+  incomplete*, which is what can honestly be said from outside.
+- It refreshes automatically at a conservative configured interval
+  (`dashboard.live_refresh_seconds`, default 5s, floor 2s — DEC-094), and a
+  manual control remains alongside it. What refreshes is a **read-only view
+  of records the recorder already wrote**: real-time observation, never
+  real-time inference. No model runs, no camera opens, and no estimate is
+  produced on any cadence. It needs a browser tab open to fire, so it is a
+  research view rather than a wall display or a monitoring service.
+  Replay does not auto-advance and the artifact mode does not poll.
+- It has never been exercised against a session being written by a compiled
+  Unity client, because the Unity task has never been compiled or run here.
+  It has been exercised against Python-simulator recordings and against
+  synthetic fixtures, including deliberately damaged ones.
+- `data_source = live` is a statement about where bytes came from. It never
+  makes a session scientifically eligible; the session format declares no
+  eligibility at all, so every session is presented as ineligible with that
+  stated as the reason.
+
+### The dashboard has never been used by anyone but its author
+
+Its usability has not been evaluated, and no researcher other than the
+author has attempted to answer a question with it. Whether the information
+architecture actually helps someone judge a run is untested.
+
+Accessibility follows stated rules — descriptive chart titles, both axis
+names on every chart, text beside every colour-coded status, a value table
+beneath every chart, disclaimers at normal body size — but has **not** been
+tested with a screen reader or any other assistive technology.
+
+### It reads today's artifact contracts
+
+Family detection, required-artifact sets, and field names track the
+Milestone 5--8 contracts as they stand at Milestone 9. A contract change
+requires a corresponding dashboard change. The reader is protected by the
+`unsupported` and `corrupt` statuses, which make an unreadable run visible
+as an unreadable run, not by the dashboard adapting to a format it does not
+know.
+
+Concretely: uncertainty artifacts written before DEC-072 carry no `axis`
+field on their coverage curve, because the two coverage axes then shared one
+grid. The dashboard **refuses to display those curves**, because which axis
+a curve was swept over cannot be established from such an artifact and must
+not be guessed. The local `m7-*` run directories are in exactly that state.
+
+### The session report is a presentation artifact
+
+`session_report.build_report` restates what a recording contains. It creates
+no evidence. Two identical reports of a synthetic recording are two
+identical statements about synthetic data, and the report says so in its own
+fields: `is_synthetic`, `scientific_evaluation_eligible = false` with a
+stated reason, the standing disclaimer, and the software-self-check banner
+are required and cannot be exported away.
+
+The report is printed or downloaded; this repository never writes one to
+disk. It carries a SHA-256 of every source file, so a reader can confirm
+afterwards that inspecting a recording did not change it.
+
+### What is not implemented in Milestone 9
+
+No MLflow, DVC, Docker, model registry, drift monitoring, deployment
+tooling, production authentication, participant-facing UI, online inference,
+or autonomous adaptation dispatch. Those are Milestone 10 and later, or out
+of scope entirely.
+
+The dashboard binds to loopback and has no authentication, no authorisation,
+and no audit log. It is a local research tool. Exposing it on a routable
+interface would publish a browser for the artifact root to anyone who can
+reach the port.
+
+### Everything pending before Milestone 9 is still pending
+
+A validated participant-labelled engagement dataset, a validated
+participant-labelled cognitive-load dataset, human-subject evaluation of
+adaptation, physical-webcam validation, UBFC-rPPG evaluation, and Unity
+compilation and runtime validation all remain outstanding. Building a
+dashboard over synthetic runs did not advance any of them.
