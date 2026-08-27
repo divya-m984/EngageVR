@@ -986,3 +986,34 @@ multimodal data, because none exists.
   population models — remains **unanswered**.
 - No medical, diagnostic, psychological, clinical, or
   adaptive-effectiveness claim follows from anything in this document.
+
+## Reading fusion and personalization in the dashboard (Milestone 9)
+
+The Milestone 9 dashboard renders these artifacts on two pages, and its main
+job on both is keeping apart what this document keeps apart.
+
+**Expert disagreement is not calibrated uncertainty.** It has its own table
+under its own name, captioned with what it is not. Calibrated uncertainty
+lives on the Uncertainty page and comes from a different milestone.
+
+**A fusion support weight is not a probability of correctness.** The
+quality-aware weights are titled *fusion support weights* and captioned as
+neither a confidence nor a probability that a prediction is right.
+
+**Modality availability is not signal quality, and neither is engagement.**
+Availability, missing-modality rate, and robustness scenarios are separate
+tables. The absence of a modality is the absence of a measurement.
+
+**Personalization is reported as a difference, never a benefit.** Population
+and personalized arms appear side by side over identical evaluation windows,
+with a column headed `personalized - population` and titled *Δ metric on
+synthetic software-check data*. On the current synthetic runs the
+personalized arm scores lower on every metric, and the dashboard displays
+that exactly as recorded. The words *improvement*, *benefit*, and *gain* do
+not appear in any data row. Cold-start subjects and population fallbacks are
+shown as designed behaviour.
+
+Per-subject views are labelled *subject-wise software evaluation*. There is
+no "best subject" or "worst subject" table and no ranking of any kind.
+
+See `docs/DASHBOARD.md`.

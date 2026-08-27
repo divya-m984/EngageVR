@@ -2382,3 +2382,520 @@ described as better.
 behaves as specified on a fixed input sequence — and no statement at all about
 whether adapting helps anyone. That question needs participants, and the
 completion wording says so.
+
+---
+
+### DEC-083: The Milestone 9 Dashboard Is Read-Only Observability, Not Live Monitoring
+
+**Date:** 2026-08-22
+**Status:** Partially superseded by DEC-090 (2026-08-25)
+
+**What still stands:** the dashboard is read-only, loads no model, opens no
+camera, runs no inference, and holds no transport client. That is the whole
+point of the milestone and is unchanged.
+
+**What was wrong:** the conclusion that the plan's real-time and replay
+modes therefore could not be delivered. It conflated *live monitoring of a
+person* with *live observability of a recording*. The second needs no model,
+no camera, and no inference, and the project plan required it. See DEC-090.
+
+**Context:** `docs/PROJECT_PLAN.md` describes Milestone 9 as a "Streamlit
+dashboard with all core monitoring pages, real-time and replay modes", and
+`docs/PROJECT_SPECIFICATION.md` lists a "Live session" page. A live page
+would need an online inference path: a camera opened, features extracted, a
+model loaded, an estimate produced, and a number shown beside a person's
+face, updating every second.
+
+**Decision:** Milestone 9 is **read-only research observability over
+persisted artifacts**. It discovers experiment runs, reads their JSON and
+Parquet documents, and renders what those documents recorded. There is no
+live mode, no inference, no camera, no model loading, and no transport
+client.
+
+Two reasons. First, a live engagement readout is the single most misreadable
+artefact this project could build: no validated participant-labelled dataset
+exists, so a number updating beside a person would be a claim about that
+person that nothing here supports. Second, the useful research question at
+this point is not "what is the estimate now" but "what did that run actually
+record, and how far can it be trusted" — which is a question about
+artifacts.
+
+The read-only boundary is structural rather than advisory. AST tests assert
+that no dashboard module writes, deletes, retrains, recalibrates, dispatches
+an adaptation, opens a model pickle, imports the transport or API layer, or
+performs a Git operation.
+
+**Consequence (as originally recorded):** the plan's live and replay pages
+were not delivered. This consequence no longer holds; both are delivered as
+read-only presentation modes, under DEC-090.
+
+---
+
+### DEC-084: Run Family Comes From Artifact Signatures, Never From Directory Names
+
+**Date:** 2026-08-22
+**Status:** Accepted
+
+**Context:** The local artifact root holds directories named `m5-*`, `m6-*`,
+`m7-*`, `m8-*`. Parsing that prefix would classify every run in one line.
+It would also be wrong the first time somebody renamed a folder, copied one
+for comparison, or created `m7-scratch` and left it empty — and the failure
+would be silent, presenting one milestone's artifacts under another
+milestone's semantics.
+
+**Decision:** A run's family is determined by the artifacts it contains.
+Each family declares the documents only it writes: `adaptation_summary.json`
+plus `adaptation_policy_config.json` for adaptation, `uncertainty.json` plus
+`uncertainty_config.json` for uncertainty, and so on. Baseline additionally
+declares a *disqualifying* set, because every training family writes
+`manifest.json`, `metrics.json`, and `splits.json`; "baseline" means "a
+training run carrying none of the later milestones' documents".
+
+Detection runs in two passes. The first requires every distinguishing
+artifact. The second accepts any of them, so a fusion run interrupted before
+`fusion_metrics.json` is reported as an **incomplete fusion run** rather
+than as an unclassifiable directory — a reader needs to know which run
+failed. A directory matching neither pass is `unknown`, which is a real
+answer and better than a guess.
+
+Where a manifest records `configuration.milestone` or `configuration.kind`,
+it is cross-checked. A disagreement raises a visible error; the signature is
+used and the conflict is not resolved silently.
+
+Directory names are shown in the run selector as display metadata.
+Filesystem modification time is never used as provenance.
+
+**Consequence:** A renamed, copied, or empty directory is classified by what
+is in it. `m5-scientific-refusal` and `m7-invalid-scientific` — two empty
+directories in the local artifact root — are reported as `unknown`, which is
+exactly what they are.
+
+---
+
+### DEC-085: One Visualization Library, and It Is the Framework's Own
+
+**Date:** 2026-08-22
+**Status:** Accepted
+
+**Context:** `docs/ARCHITECTURE.md` previously listed "Streamlit, Plotly"
+as the dashboard stack. Plotly would give interactive hover, zoom, and
+selection.
+
+**Decision:** Streamlit only. Charts use `st.line_chart`, `st.bar_chart`,
+`st.scatter_chart`, and `st.dataframe`. Plotly, Altair, matplotlib, and
+Bokeh are not added.
+
+The plots this dashboard needs are line charts of recorded curves, scatter
+plots of stored predictions, histograms of stored columns, and confusion
+matrices — all of which the native charts draw. Adding a second charting
+library would mean two sets of theming, two accessibility stories, and two
+places for an axis label to be wrong, in exchange for hover text. Every
+chart already carries a table of its plotted values beneath it, which serves
+the same inspection need and is readable by assistive technology.
+
+Streamlit ships Altair and pydeck as its own transitive dependencies. No
+EngageVR module imports either.
+
+**Consequence:** One dependency was added for Milestone 9: `streamlit`.
+Interactive zoom is unavailable; the value table beneath each chart is the
+substitute.
+
+---
+
+### DEC-086: Absence Crosses Into the Presentation Layer as a Typed State
+
+**Date:** 2026-08-22
+**Status:** Accepted
+
+**Context:** Every metric in this repository can legitimately be `None`: a
+fold whose prerequisites were unmet, a conformal quantile with too few
+calibration points, a modality with no usable window. Rendering those as
+`0` is one `float(value or 0)` away, and on a metrics page *not computable*
+and *very bad* are opposite readings that would then be indistinguishable.
+
+**Decision:** Every number reaching a page is a `MetricDisplayValue`, which
+holds either a value or an `unavailable_reason` and refuses to hold both or
+neither. A non-finite value is **refused at construction**: `NaN` printed as
+a number reads as a measurement, and `inf` reads as a very large one. A
+genuine `0.0` survives as `0.0`.
+
+Formatting lives in exactly one module. Probabilities, percentages, counts,
+and interval widths are separate display kinds: a percentage carries `%`, a
+probability does not, a count has no decimals, and an interval width carries
+the regression target's units and is never given a percent sign, because it
+is not a probability and is not confined to `[0, 1]`.
+
+Table truncation is recorded and stated, never silent. A table that quietly
+stops at row 1000 reads as a complete table.
+
+**Consequence:** A model whose folds all failed shows a column of
+*Unavailable*, not a column of zeros that reads as the worst possible score.
+
+---
+
+### DEC-087: The Uncertainty View Cannot Hold the Other Task's Controls
+
+**Date:** 2026-08-22
+**Status:** Accepted
+
+**Context:** DEC-072 established that classification and regression are
+selective on different axes that move in opposite directions and never share
+a grid. A dashboard is where that separation is most likely to erode: one
+"uncertainty" page, one threshold slider, one coverage curve, and the
+distinction is gone — with `1 - interval_width` as the obvious bridge.
+
+**Decision:** `UncertaintyDashboardData` **refuses** to be constructed with
+a calibrated-confidence, probability-margin, or confidence-curve field when
+`task_type == "regression"`, and refuses interval fields when
+`task_type == "classification"`. The page hides the other task's controls
+rather than showing them disabled, because it structurally cannot carry
+them.
+
+Each axis is rendered with its own name, units, and monotonicity contract.
+Neither is relabelled "uncertainty threshold". `1 - interval_width` is never
+computed anywhere in the dashboard.
+
+A recorded curve whose `axis` field disagrees with the task type is not
+displayed, with the disagreement stated. A curve written before DEC-072 —
+which carries no `axis` field at all, because the two axes then shared one
+grid — is likewise refused, because which axis it was swept over cannot be
+established and must not be guessed. The local `m7-*` artifacts predate
+DEC-072 and are handled by exactly this path.
+
+**Consequence:** A regression page shows no confidence control and a
+classification page shows no interval control, and neither is a matter of
+page-authoring discipline.
+
+---
+
+### DEC-088: Provenance Is Carried, Not Reconstructed
+
+**Date:** 2026-08-22
+**Status:** Accepted
+
+**Context:** A dashboard derives: it filters, aggregates, bins, and plots.
+Each derivation is an opportunity to build a fresh object describing the
+result and to leave the synthetic flag behind — after which a chart of
+synthetic numbers is a chart with no provenance at all.
+
+**Decision:** `DashboardProvenance` is constructed once per run, in the
+catalogue, and carried into every view. It refuses
+`scientific_evaluation_eligible=True` when the artifact says the data is
+synthetic, and its `derive()` method refuses to change either flag, so a
+derived view cannot become eligible by being plotted.
+
+Every result-bearing page renders the provenance banner **at the top** — not
+in an expander, not in a footer. For a synthetic run it shows the
+software-self-check banner, and it states the eligibility flag in words.
+There is no green "validated" styling anywhere: software checks passing is
+not validation.
+
+No dashboard control can reach the provenance fields. There is no "Mark as
+scientifically validated" action, no "Treat as real" switch, and
+`DashboardConfig` carries no such key — its `extra="forbid"` means one
+cannot be added by configuration either. Where two recorded sources
+disagree, the run is shown as corrupt with the contradiction stated.
+
+**Consequence:** Provenance survives every derivation the dashboard
+performs, and a test suite checks that a page cannot omit the banner.
+
+---
+
+### DEC-089: The Adaptation Page Has No Field an Effectiveness Claim Could Occupy
+
+**Date:** 2026-08-22
+**Status:** Accepted
+
+**Context:** DEC-082 established that Milestone 8's metrics describe a
+controller. A dashboard reintroduces the temptation in a new form: a metric
+card labelled "Adaptation effectiveness" needs no new computation, only a
+new caption over numbers that already exist.
+
+**Decision:** `AdaptationDashboardData` has no effectiveness, benefit,
+improvement, or success-rate field, and `extra="forbid"` prevents adding
+one. The page reports evaluated windows, gate outcomes, hold reasons,
+proposals, spacing, guards, and the difficulty trace — all of them
+statements about software.
+
+The lifecycle is five separate counts, never summed: proposal, command
+built, dispatched, acknowledged, applied. `AdaptationLifecycleCounts`
+refuses an ordering that could not have happened — a command without a
+proposal, a dispatch exceeding the commands built, an acknowledgement
+without a dispatch. For the current Milestone 8 runs the page shows 19
+proposals, 19 commands built, 0 dispatched, 0 acknowledged, and says in
+words that nothing reached a running environment.
+
+The guard-free comparison is titled "software-controller action-frequency
+comparison" and captioned with the denial that either controller is better,
+safer, or more effective.
+
+**Consequence:** A reader can see how often the controller acted and which
+guard stopped it when it did not, and can find nowhere on the page a
+statement that acting helped anyone.
+
+---
+
+### DEC-090: Real-Time and Replay Are Read-Only Presentation Modes, Not Live Inference
+
+**Date:** 2026-08-25
+**Status:** Accepted
+**Supersedes:** the delivery conclusion of DEC-083
+
+**Context:** `docs/PROJECT_PLAN.md` §"Milestone 9" requires "real-time and
+replay modes", and its acceptance criteria require that live data be
+visually labelled and that a session report be reproducible. DEC-083
+declined to build either, on the grounds that a live engagement readout
+beside a person's face would be a claim nothing in this repository supports.
+
+That reasoning was right about the danger and wrong about the requirement.
+It read "real-time mode" as *live monitoring of a person* when the plan only
+needs *live observability of what has been recorded*. Milestone 4 already
+writes an append-only session recording; observing it needs no model, no
+camera, no inference, and no second protocol.
+
+**Decision:** Milestone 9 has three evidence modes, explicitly separated in
+the UI and in the types.
+
+- **Experiment artifacts** — the Milestone 5-8 observatory, unchanged and
+  still primary.
+- **Live session** — a read-only reader over an existing session recording,
+  re-read on request, presenting records the recorder had already persisted.
+- **Session replay** — read-only navigation through a recording already
+  complete or interrupted.
+
+The prohibitions of DEC-083 are unchanged and are extended to cover the new
+code: no model runner, no calibration, no inference, no policy evaluation,
+no command dispatch, no artifact or recording mutation, no simulator, no
+replay transmitter, no transport client, and no second protocol. A live
+display shows no engagement value, no cognitive-load value, no confidence,
+and no abstention, because a session recording structurally cannot carry
+one; each is stated as *Unavailable* with the reason.
+
+A live data source is not evidence. `data_source = live` says where bytes
+came from, not that a study was designed, labelled, approved, or validated,
+and the session format declares no scientific eligibility at all — so every
+session is presented as ineligible with that stated as the reason.
+
+**Consequence:** the plan's Milestone 9 objectives are met without an online
+inference path. The read-only boundary is enforced by extended AST tests
+(`SessionRecorder`, `JsonlWriter`, `ReplayPlayer`, `publish`, `connect`,
+`asyncio`, socket modules, the simulator, and the replay player are all
+forbidden) and, behaviourally, by tests that digest every file of a
+recording before and after a full inspection.
+
+---
+
+### DEC-091: A Recorded Session Is Not an Experiment Run, and Has Its Own Catalogue
+
+**Date:** 2026-08-25
+**Status:** Accepted
+
+**Context:** the dashboard now discovers two kinds of thing: Milestone 5-8
+experiment runs and Milestone 4 session recordings. It would have been less
+code to put both in one catalogue with a `kind` field.
+
+**Decision:** they are separate types (`DashboardSessionCatalogue`,
+`DashboardSessionSummary`, `DashboardSessionProvenance`,
+`DashboardReplayState`, `DashboardSessionReport`), scanned from separate
+roots (`dashboard.artifact_root`, `dashboard.session_root`), by separate
+modules.
+
+Their provenance contracts genuinely differ. An experiment run declares
+`scientific_evaluation_eligible`, a dataset fingerprint, a split manifest, a
+target, and a task type. A session recording declares none of those and
+instead carries per-message provenance, arrival ordering, and receiver
+anomalies. One type covering both would need every field optional, at which
+point neither contract is checkable — and a task recording could appear in
+a run selector, which is the point at which a transport log starts reading
+like an experiment result.
+
+**Consequence:** more types and no shared catalogue code. In exchange, a
+recording can never be listed as a run, and the eligibility rules of each
+are enforced separately by their own validators.
+
+---
+
+### DEC-092: Tail Safety Is Its Own Taxonomy, Separate From "Corrupt"
+
+**Date:** 2026-08-25
+**Status:** Accepted
+
+**Context:** the artifact catalogue calls an unparseable document *corrupt*
+and stops displaying its run. Applied to a session being appended to, that
+rule marks every live recording corrupt, because the final line usually has
+no terminating newline yet.
+
+**Decision:** the session reader distinguishes five states, and none of them
+is the run catalogue's `corrupt`:
+
+1. a complete line that decodes — presented;
+2. a complete line that will not decode — **kept visible** with its 1-based
+   line number, a problem code, and the reason;
+3. an incomplete trailing line — reported as **transient**, not counted, not
+   parsed, and explicitly not called corruption;
+4. an interrupted session (no summary) — *active or incomplete*, fully
+   inspectable;
+5. an absent stream or a removed directory — its own status with a reason.
+
+A final complete line that happens to lack its newline is indistinguishable
+from a torn one, so it is reported as partial; that resolves on the next
+read.
+
+`SessionStore` was not reused for this. Its `iter_messages` raises on the
+first bad line, which would blank a live view because a writer was
+mid-flush, and its `recover` is whole-file and not incremental. The reader
+does reuse the store's layout constants and its session-id allowlist — the
+pure parts — and the protocol's own `decode_stored_message`, so a record
+this dashboard calls sound is sound by the project's definition.
+
+**Consequence:** a malformed interior line is never silently swallowed and a
+transient tail never reads as damage. The cost is a second parser, kept
+narrow and covered by tests that construct each of the five states.
+
+---
+
+### DEC-093: The Session Report Is a Pure Function With a Content Fingerprint
+
+**Date:** 2026-08-25
+**Status:** Accepted
+
+**Context:** the project plan requires that a session report "can be
+reproduced". A report containing its own export timestamp is unique on every
+export, which makes reproduction unobservable.
+
+**Decision:** `build_report` is a pure function of an already-completed
+read. `report_fingerprint` is a SHA-256 over the canonical report content
+with exactly two fields excluded: the fingerprint itself and
+`exported_at_utc`. Wall-clock time is therefore explicitly outside the
+report's logical identity, and the same recording reported twice yields
+byte-identical JSON and Markdown.
+
+A **partial** read cannot produce a report at all. Counts taken from half a
+file read exactly like counts taken from all of it, so the builder refuses
+rather than reporting.
+
+Provenance is not removable: `is_synthetic`,
+`scientific_evaluation_eligible` (always false, with its reason), the
+standing disclaimer, and — for a synthetic recording — the
+software-self-check banner are required fields whose validators refuse a
+report that drops, rewords, or contradicts them. There is no "clean" export.
+
+The report is **printed or downloaded, never saved by this repository**.
+Writing it would be the one file operation Milestone 9 does not have. It
+carries a SHA-256 of every source file so a reader can confirm afterwards
+that inspecting a recording did not change it.
+
+**Consequence:** reproduction is a testable property rather than a claim,
+and a report cannot be laundered into looking like validated evidence.
+
+---
+
+### DEC-094: The Live View Refreshes Automatically, at a Conservative Interval
+
+**Date:** 2026-08-25, revised 2026-08-27
+**Status:** Accepted (revises the original "the live view does not poll")
+
+**Context:** `docs/PROJECT_PLAN.md` §"Milestone 9" requires a **real-time**
+mode. The original DEC-094 made refresh explicit — press *Read new records*
+— which is a *current* view, not a real-time one. Three worries drove that:
+filesystem traffic, a moving number beside a person's session, and the rule
+that no automated test may depend on a long-running process.
+
+The first is answered by a floor rather than by having no timer at all. The
+second is a worry about *what* is displayed, not about *when* it is redrawn:
+a page carrying no engagement value, no cognitive-load value, no confidence,
+and no person-status indicator does not acquire one by being redrawn. The
+third turned out to rest on a false assumption — the cadence can be verified
+where it is configured, without waiting for a firing.
+
+**Decision:** the live-observation page refreshes automatically, using
+Streamlit's native `st.fragment(run_every=...)` — available in the installed
+Streamlit 1.62, so no dependency was added for it. The interval is
+`dashboard.live_refresh_seconds`, default 5s, floor 2s. Each firing re-reads
+the recording with the read-only session reader and redraws what it finds.
+The header states `Mode: LIVE OBSERVATION` and `Automatic refresh: every N
+seconds`.
+
+The manual *Read new records* button remains as an additional action; both
+paths go through the same body.
+
+**Scope, which is the whole point of the decision:**
+
+- **Only the live page.** Replay never auto-advances — its cursor moves only
+  when one of its own controls is used — and the artifact observatory never
+  polls. The fragment is constructed inside `live_session_page` and nowhere
+  else, and a test asserts `run_every` occurs exactly once in the package.
+- **Real-time observation is not real-time inference.** What refreshes is a
+  view of records another subsystem already wrote. No model is loaded, no
+  camera opened, no estimate produced, nothing sent, nothing written, on any
+  cadence. A session recording structurally cannot carry an engagement or
+  cognitive-load value, so a faster refresh could not produce one.
+- **The interval is validated, not clamped.** `live_refresh_interval` refuses
+  a non-numeric, non-finite, zero, negative, or sub-2s value and the timer
+  does not start, with the reason shown. Clamping would leave a page
+  refreshing at a cadence nobody chose, which is the sort of unattributed
+  behaviour a read-only observability tool must not have. The page still
+  renders and its manual control still works.
+- **Nothing is cached between passes.** The session catalogue and every
+  session read stay uncached: the experiment catalogue's modification-time
+  key is sound for runs, which are written once, but an append to a recording
+  leaves its directory's modification time untouched, so the same key would go
+  stale in exactly the mode that must not — and a cached read would give a
+  live view that cannot show an appended record.
+
+Nothing is interpolated or fabricated between two passes. A recording that
+*shrank* between passes is still reported as an error, because an
+append-only file cannot shrink on its own.
+
+**Consequence:** the plan's *real-time mode* is met by a mode that actually
+refreshes, and the honesty the original decision was protecting is now
+carried by the scope statements and the read-only boundary rather than by
+the absence of a timer. A researcher watching a session sees new records
+appear without pressing anything, and still sees `Mode: LIVE OBSERVATION`
+and the standing disclaimer above them.
+
+---
+
+### DEC-095: Synthetic, Public, and Live Are Labelled in Words, and Tested With Fixtures
+
+**Date:** 2026-08-27
+**Status:** Accepted
+
+**Context:** `docs/PROJECT_PLAN.md` accepts Milestone 9 only when "synthetic,
+public, and live data are visually labelled". The dashboard did display the
+recorded `data_source`, but as the raw string — `public_dataset` in a
+monospaced cell — and only the synthetic case had ever been rendered,
+because no public dataset and no live participant recording exists in this
+repository. "There is nothing to label" is not evidence that the labelling
+works; it is evidence that it has never been exercised.
+
+**Decision:** two things.
+
+*The label is rendered in words, beside the recorded value.*
+`presentation.data_source_label` produces `PUBLIC (recorded as
+'public_dataset')`, `LIVE (recorded as 'live')`, `SYNTHETIC (recorded as
+'synthetic')`, `MIXED`, `UNRECOGNISED (recorded as '…')`, or `Unavailable —
+no data source is recorded`. The recorded value is never replaced, only
+accompanied. `data_source_statement` renders what that source does and does
+not establish, and both appear on the artifact banner, the session banner,
+the session data-source table, the session catalogue, and the dataset page.
+
+The vocabulary is the project's own `engagevr.schemas.session.DataSource`
+enum. No provenance string is invented, and a test asserts every member has
+a label and a statement.
+
+*All three cases are exercised with temporary fixtures.*
+`tests/unit/test_dashboard_provenance_labels.py` builds a synthetic run, a
+`public_dataset` run, and a `live` recording, and renders each through the
+real pages via `AppTest`.
+
+**Neither public nor live implies scientific eligibility.** `data_source`
+and `scientific_evaluation_eligible` are independent fields, and the tests
+assert a public run and a live recording both stay visibly ineligible with
+the reason stated, and that no provenance mode drops the standing
+disclaimer.
+
+**Consequence:** the acceptance criterion is met by demonstration rather
+than by the absence of a counter-example, and the day a public corpus or a
+real live recording arrives, the surface that must label it has already been
+rendered.

@@ -8,8 +8,8 @@
 
 ## Status
 
-**Milestone 8 adaptive-environment implementation complete; human-subject
-evaluation of adaptation appropriateness, usability, and benefit pending.**
+**Milestone 9 research dashboard implementation complete; scientific
+evaluation and human-subject validation remain pending.**
 
 Implemented: webcam capture, face landmarks (MediaPipe), behavioural proxy
 features, capture quality, a classical rPPG pipeline (GREEN / CHROM / POS,
@@ -34,20 +34,27 @@ adaptation **policy**: an ordinal state-to-direction demonstration rule,
 conservative conflict resolution, a dwell requirement, a cooldown, session
 adaptation bounds and budget, an explicit session-scoped policy state, a
 pure proposal-to-command builder that sends nothing, and 15 deterministic
-controller scenarios.
+controller scenarios; and -- new in Milestone 9 -- a local **READ-ONLY**
+research dashboard (Streamlit) that discovers experiment runs by artifact
+signature, verifies their checksums, renders baseline, fusion,
+personalization, uncertainty, and adaptation artifacts with their recorded
+provenance on every page, observes and replays recorded task sessions
+without writing to them, and exports a deterministic session report.
 
 Not implemented: online inference, autonomous dispatch of a policy-derived
 command, a learned or reinforcement-learning policy, stimulus-pacing or
-scene-content adaptation, break triggering, fatigue estimation, HRV,
-Streamlit, MLflow, DVC, Docker, deep learning. No deep or neural fusion
-exists in this repository, and no per-subject model is trained from
-scratch.
+scene-content adaptation, break triggering, fatigue estimation, HRV, MLflow,
+DVC, Docker, deep learning. No deep or neural fusion exists in this
+repository, and no per-subject model is trained from scratch. The
+dashboard's live mode observes an existing **recording**; it performs no
+inference and produces no estimate of its own.
 
 Pending validation: **Unity compilation and runtime** (no Unity Editor is
 installed here), **physical-webcam capture**, **UBFC-rPPG evaluation**,
 **any evaluation on real participant labels** — none exist — and **any
 human-subject evaluation of adaptation**. No adaptation proposed by this
-policy has ever been shown to a person.
+policy has ever been shown to a person, and the dashboard has never been
+used by anyone but its author.
 
 > **rPPG heart-rate values are signal-processing estimates from camera
 > data.** They are not medical measurements, have not been validated
@@ -774,6 +781,145 @@ frequency; it is not a claim that either controller is better for anyone.
 
 See [Adaptive Environment](docs/ADAPTIVE_ENVIRONMENT.md).
 
+## Research Dashboard (Milestone 9)
+
+**READ-ONLY RESEARCH OBSERVABILITY.** The dashboard makes what previous
+milestones recorded inspectable. It displays what a run recorded; it computes
+no new scientific quantity.
+
+```bash
+# Launch the local dashboard (binds to 127.0.0.1:8501, opens no browser)
+uv run python -m engagevr dashboard
+
+# Scan the artifact root and report every run, without starting a server
+uv run python -m engagevr dashboard-check --artifact-root artifacts/experiments
+
+# List recorded sessions, or build one session's report, without a server
+uv run python -m engagevr dashboard-sessions
+uv run python -m engagevr dashboard-sessions --session demo-session
+
+# Directly, for development
+uv run streamlit run src/engagevr/dashboard/app.py
+```
+
+### Three evidence modes
+
+Chosen in the sidebar and never merged into one ambiguous state:
+
+| Mode | Evidence |
+|------|----------|
+| **Experiment artifacts** (default) | Milestone 5--8 run directories |
+| **Live session** | a session recording, re-read automatically every `dashboard.live_refresh_seconds` |
+| **Session replay** | a recording already complete or interrupted, navigated by hand |
+
+**Real-time here means observability, not inference.** The live mode
+re-reads a recording the Milestone 4 recorder already wrote. It loads no
+model, opens no camera, runs no inference, and produces no estimate. A
+session recording structurally cannot carry an engagement value, a
+cognitive-load value, a confidence, an interval, or an abstention, so each is
+shown as *Unavailable* with the reason. Replay navigates records already on
+disk; it re-runs no simulator and re-emits nothing.
+
+The live page refreshes on its own -- `st.fragment(run_every=...)`, a native
+Streamlit mechanism, at a conservative configured interval with a two-second
+floor -- and states `Mode: LIVE OBSERVATION` and `Automatic refresh: every N
+seconds` above the evidence. A manual *Read new records* control remains.
+**Only that page refreshes:** replay never auto-advances and the artifact
+observatory never polls.
+
+### Synthetic, public, and live are labelled in words
+
+Every recorded `data_source` is rendered as a label beside its raw value --
+`SYNTHETIC (recorded as 'synthetic')`, `PUBLIC (recorded as
+'public_dataset')`, `LIVE (recorded as 'live')` -- together with a statement
+of what it does and does not establish. **Neither public nor live implies
+scientific eligibility:** where the bytes came from is not a statement that a
+study was designed, labelled, approved, or validated.
+
+### Ten artifact pages, plus two session pages
+
+Overview; Dataset and provenance; Signal and feature quality; Baseline
+models; Multimodal fusion; Personalization; Uncertainty and abstention;
+Adaptive environment; Run integrity; Limitations and scientific status. Plus
+Live session observation and Session replay.
+
+### Exportable session report
+
+A deterministic JSON or Markdown report of one recording, downloadable in
+the browser or printable from `dashboard-sessions`. Its fingerprint covers
+the content and excludes export time, so the same recording reported twice
+is byte-identical. Provenance cannot be exported away: `is_synthetic`,
+`scientific_evaluation_eligible = false` with its reason, the standing
+disclaimer, and the software-self-check banner are required fields.
+
+### Runs are classified by what they contain
+
+Family detection uses artifact signatures, **never directory names**. A
+folder called `m7-trial` holding no Milestone 7 document is not a Milestone 7
+run; it is `unknown`, which is a real answer and better than a guess. A
+directory that exists is not a successful run: the catalogue distinguishes
+`completed`, `failed`, `incomplete`, `corrupt`, `unsupported`, and `unknown`,
+and a run missing a required artifact never has its numbers displayed as
+though it had finished.
+
+### Provenance is carried, not reconstructed
+
+Every result-bearing page renders the provenance banner **at the top** --
+not in an expander, not in a footer. For a synthetic run it shows
+`SOFTWARE SELF-CHECK -- NOT SCIENTIFIC EVALUATION` and states
+`scientific_evaluation_eligible = false` in words. `DashboardProvenance`
+refuses to be constructed as eligible when the artifact says synthetic, and
+refuses to let a derived view change either flag. There is no
+"Mark as validated" control, no "Treat as real" switch, and no configuration
+key that could reach those fields.
+
+### The vocabulary stays separate
+
+Signal quality, calibrated classification confidence, predictive entropy,
+probability margin, ensemble disagreement, fusion support weight, regression
+prediction-interval width, selective coverage, abstention rate, and empirical
+interval coverage are ten different quantities. None is a synonym for
+another, there is no card named simply "Confidence", and there is **no single
+combined uncertainty score** anywhere.
+
+### Classification and regression are not interchangeable
+
+`UncertaintyDashboardData` refuses to hold a calibrated-confidence field on a
+regression run and refuses to hold an interval field on a classification run,
+so a page cannot show the wrong control. Classification sweeps
+`confidence_threshold` (raising it is stricter: coverage non-increasing);
+regression sweeps `maximum_interval_width` (raising it is more permissive:
+coverage non-decreasing). Neither is relabelled "uncertainty threshold", and
+`1 - interval_width` is never computed.
+
+### The adaptation page reports controller behaviour
+
+It has no effectiveness card, no benefit metric, and no field one could
+occupy. Proposal, command built, dispatched, acknowledged, and applied are
+five separate counts that are never summed: for the current Milestone 8 runs
+that reads 19 proposals, 19 commands built, **0 dispatched, 0 acknowledged**,
+and the page says in words that nothing reached a running environment.
+
+### An absent value is never a zero
+
+`None` renders as *Unavailable*; `NaN` and infinities are refused at
+construction; `0.0` remains a legitimate zero. Counts are integers,
+percentages carry `%`, probabilities do not, and an interval width carries
+the regression target's own units and never a percent sign.
+
+### Read-only, structurally
+
+The dashboard cannot retrain, recalibrate, re-run, dispatch, acknowledge,
+modify a manifest, delete a run, or touch Git. AST tests over its own source
+assert the absence of every write, fit, predict, calibrate, and dispatch
+call, and of every import of a runner, the transport layer, `joblib`,
+`pickle`, and `sklearn`. It reads JSON and Parquet only: `models/*.joblib`
+are Python pickles, and loading one executes code in it.
+
+There is no "Apply adaptation" button and no "Run model" button.
+
+See [docs/DASHBOARD.md](docs/DASHBOARD.md).
+
 ## Privacy
 
 - Raw video is never stored by default.
@@ -828,6 +974,12 @@ src/engagevr/         Python package
                       personalization-demo / personalization-train
   cli_milestone7.py   uncertainty-demo / uncertainty-train
   cli_milestone8.py   adaptation-demo
+  dashboard/          READ-ONLY research dashboard: catalogue, loaders,
+                      formatting, aggregation, presentation, per-family
+                      views, session reader/catalogue/views/report,
+                      Streamlit components/pages/session_pages/app,
+                      launch (M9)
+  cli_milestone9.py   dashboard / dashboard-check / dashboard-sessions
 configs/              YAML configuration files
 protocol/             Checked-in JSON Schema and contract fixtures (M4)
 scripts/              Model download, protocol-artefact generation
@@ -858,6 +1010,7 @@ docs/                 Project documentation
 - [Multimodal Fusion](docs/MULTIMODAL_FUSION.md)
 - [Uncertainty and Abstention](docs/UNCERTAINTY_AND_ABSTENTION.md)
 - [Adaptive Environment](docs/ADAPTIVE_ENVIRONMENT.md)
+- [Research Dashboard](docs/DASHBOARD.md)
 
 ## Disclaimer
 
@@ -876,6 +1029,13 @@ software self-check, not evidence about any person.
 No adaptation rule in this repository is psychologically validated,
 pedagogically optimal, therapeutic, safe, or demonstrated to benefit any
 person, and no adaptation it proposes has ever been shown to anyone.
+
+The research dashboard displays evidence; it does not create any. Every run
+it can currently show is a software self-check on synthetic data, and
+selecting, filtering, aggregating, or plotting such a value does not make it
+scientific evidence. Dashboard visualizations do not establish engagement,
+cognitive load, psychological state, health status, safety, or adaptation
+benefit.
 
 ## License
 

@@ -28,8 +28,17 @@ so real sensors can be substituted later.
                                                     +------------------+
                                                     |  Dashboard       |
                                                     |  (Streamlit)     |
+                                                    |  READ-ONLY, over |
+                                                    |  artifacts/ and  |
+                                                    |  session         |
+                                                    |  recordings      |
                                                     +------------------+
 ```
+
+The dashboard reads persisted artifacts and persisted session recordings. It
+is not in the capture, inference, or adaptation path, and it has no arrow
+back into any of them. Its live mode is an arrow *from* the session store,
+never into it: it re-reads a recording the recorder already wrote.
 
 The arrow from the adaptation layer to the task environment is the **design
 intent**, not the current behaviour. As of Milestone 8 the policy produces a
@@ -359,7 +368,54 @@ simulator, the replay player, and the Unity client (DEC-025).
 
 ### 8. Dashboard (`src/engagevr/dashboard/`)
 
-Streamlit multi-page dashboard for monitoring and analysis.
+**READ-ONLY RESEARCH OBSERVABILITY** over the artifacts previous milestones
+already wrote. It displays what a run recorded; it computes no new
+scientific quantity, and it has no path from a click to a retrained model, a
+re-run pipeline, or a dispatched adaptation.
+
+| Module | Streamlit? | Responsibility |
+|--------|-----------|---------------|
+| `catalogue.py` | no | Run discovery, artifact-signature family detection, status, checksums |
+| `loaders.py` | no | Read-only JSON and Parquet access with column selection |
+| `formatting.py` | no | All display formatting; `None` never becomes `0` (DEC-086) |
+| `aggregation.py` | no | Display-only aggregates: bins, counts, residuals |
+| `presentation.py` | no | Terminology and limitations as typed data |
+| `views_dataset.py` | no | Dataset provenance and measurement quality |
+| `views_models.py` | no | Classification and regression results |
+| `views_fusion.py` | no | Fusion and personalization |
+| `views_uncertainty.py` | no | Selective prediction, two coverage axes (DEC-072) |
+| `views_adaptation.py` | no | Controller behaviour; no effectiveness field exists |
+| `session_reader.py` | no | Tail-safe read-only recording parsing (DEC-092) |
+| `session_catalogue.py` | no | Session discovery, status, provenance (DEC-091) |
+| `views_session.py` | no | Live and replay view models |
+| `session_report.py` | no | The pure, fingerprinted session report (DEC-093) |
+| `components.py` | yes | Provenance banners, tables, charts, metric cards |
+| `pages.py` | yes | The ten artifact pages |
+| `session_pages.py` | yes | The live and replay pages |
+| `app.py` | yes | Entry point, evidence-mode selector, selectors, caching |
+| `launch.py` | no | `streamlit run` argv construction |
+| `schemas/dashboard.py` | no | Typed presentation models, `extra="forbid"` |
+| `schemas/dashboard_session.py` | no | Typed session models, replay cursor, report |
+
+**Three evidence modes** (DEC-090), separated in the UI and in the types:
+persisted experiment artifacts (primary), read-only live observation of a
+session recording, and read-only replay of one. *Live* means re-reading a
+recording on a conservative timer (DEC-094), not inference: no model is
+loaded, no camera opened, and no estimate produced anywhere in this
+package, on any cadence. Only the live page refreshes on its own — replay
+never auto-advances and the artifact observatory never polls.
+
+**The layering is import-enforced.** Nothing below `components.py` or
+`session_pages.py` may import Streamlit, so the unit tests need no browser,
+no socket, and no server. AST tests also assert that no dashboard module
+writes, deletes, retrains, recalibrates, dispatches, opens a model pickle,
+constructs a `SessionRecorder`, `JsonlWriter`, or `ReplayPlayer`, imports the
+simulator, the replay player, `asyncio`, or a socket module, or touches Git.
+
+Run families are detected from artifact signatures, **never from directory
+names** (DEC-084). A directory that exists is not a successful run: the
+catalogue distinguishes completed, failed, incomplete, corrupt, unsupported,
+and unknown. See `docs/DASHBOARD.md`.
 
 ### 9. Cross-Cutting Concerns
 
@@ -391,8 +447,23 @@ Streamlit multi-page dashboard for monitoring and analysis.
    commands and stops; no policy-derived command is dispatched.
 8. **Log:** Every step is logged with full provenance for replay and analysis.
    Every policy evaluation -- hold or proposal -- becomes one auditable row.
-9. **Display:** The dashboard shows live or replayed data with clear labels for
-   data source (live, public dataset, synthetic) and reliability.
+9. **Display (M9):** The dashboard reads the persisted artifacts of steps
+   4--8 and shows them with their recorded provenance: data source,
+   synthetic status, and scientific eligibility on every result-bearing
+   page. It never re-runs any step above, and a view derived from a
+   synthetic artifact stays synthetic.
+10. **Observe and replay (M9):** The same dashboard also reads the session
+    recordings written in step 7, either as they are appended to (live
+    observation, refreshed automatically at the configured interval) or
+    after the fact (replay, navigated by hand). Both are **read-only
+    presentation** (DEC-090, DEC-094): the reader re-reads a file the
+    recorder already wrote. No arrow runs from the dashboard back into
+    steps 1--8, and a recording carries no estimate from steps 4--6 to
+    display.
+11. **Report (M9):** A deterministic session report can be built from a
+    complete read and downloaded. It is a presentation artifact with a
+    content fingerprint (DEC-093), not a new experiment result, and it
+    carries its source's provenance permanently.
 
 ## Technology Stack
 
@@ -408,7 +479,7 @@ Streamlit multi-page dashboard for monitoring and analysis.
 | ML | scikit-learn 1.9 (histogram gradient boosting; **no XGBoost**, DEC-037) |
 | Model persistence | joblib |
 | Deep learning | PyTorch (deferred) |
-| Dashboard | Streamlit, Plotly |
+| Dashboard | Streamlit 1.62 (native charts; **no Plotly**, DEC-085) |
 | Storage | JSON Lines (M4); Parquet, SQLite (deferred) |
 | Experiment tracking | MLflow (incremental) |
 | Data versioning | DVC (incremental) |

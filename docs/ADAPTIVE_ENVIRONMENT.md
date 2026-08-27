@@ -796,6 +796,43 @@ made here.
    path.
 6. Live-stream integration, if and when a project requirement calls for it.
 
+## How the Milestone 9 dashboard displays this
+
+The dashboard's Adaptive-environment page reports **controller behaviour**.
+It has no effectiveness card, no benefit metric, and no field in which one
+could be written: `AdaptationDashboardData` has no such attribute, and
+`extra="forbid"` prevents adding one.
+
+**The five lifecycle states stay five numbers.** Proposal, command built,
+dispatched, acknowledged, and applied are displayed in separate rows with an
+explanation of each, and are never summed into one "adaptations" figure.
+`AdaptationLifecycleCounts` refuses an ordering that could not have
+happened — a command without a proposal, a dispatch exceeding the commands
+built, an acknowledgement without a dispatch. For the current runs the page
+shows 19 proposals, 19 commands built, **0 dispatched, 0 acknowledged**, and
+states in words that nothing reached a running environment.
+
+**HOLD is displayed as a decision.** The hold-reason distribution is a
+first-class table, captioned to say that every evaluated window produced
+exactly one decision and that a hold is the controller working.
+
+**Static mode is displayed as a condition.** A run in
+`experiment_mode=static` is described as a legitimate experimental control
+condition; every window holding is the expected behaviour of that condition,
+not a malfunction, not a disabled participant, and not low engagement.
+
+**The difficulty trace is a software diagnostic.** It plots `window_order`
+against the recorded difficulty, one series per session, subtitled
+*"Synthetic controller scenario — software diagnostic only"*. It is never
+labelled a participant adaptation response.
+
+**The guard-free comparison is action frequency only.** It is titled
+*software-controller action-frequency comparison* and captioned with the
+denial that either controller is better, safer, or more effective for any
+person.
+
+See `docs/DASHBOARD.md`.
+
 ---
 
 **Milestone 8 adaptive-environment implementation complete; human-subject

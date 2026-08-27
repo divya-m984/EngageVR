@@ -574,3 +574,41 @@ format is extended, not replaced.
 - Real participant-labelled calibration and selective-prediction evaluation
   remain **pending**, because no validated participant-labelled engagement
   or cognitive-load dataset exists in this project.
+
+## How the Milestone 9 dashboard displays this
+
+The dashboard's Uncertainty-and-abstention page preserves this document's
+vocabulary structurally rather than by convention.
+
+**The two task types cannot borrow each other's controls.**
+`UncertaintyDashboardData` refuses to be constructed with a
+calibrated-confidence, probability-margin, or confidence-curve field when
+the task type is regression, and refuses interval fields when it is
+classification. The page hides the other task's controls rather than showing
+them disabled, because it structurally cannot carry them.
+
+**The two coverage axes keep their own names, units, and directions.**
+Classification is swept over `confidence_threshold` (a probability in
+`[0, 1]`; raising it is stricter, so coverage is non-increasing). Regression
+is swept over `maximum_interval_width` (the target's own units; raising it is
+more permissive, so coverage is non-decreasing). Neither is relabelled
+"uncertainty threshold", and `1 - interval_width` is never computed anywhere
+in the dashboard.
+
+**A curve whose recorded axis disagrees with its task type is not shown**,
+with the disagreement stated. A curve written before DEC-072 carries no
+`axis` field at all, because the two axes then shared one grid; such a curve
+is refused, because which axis it was swept over cannot be established and
+must not be guessed.
+
+**The three selective outcomes reconcile.** `accepted + abstained +
+unavailable = evaluated` is checked, and a mismatch is displayed as an
+**artifact validation error** with the recorded counts unchanged — never
+normalised away. An abstention is not an error and is not counted as one; an
+unavailable window is a separate state again, because nothing was withheld.
+
+**Calibrated confidence, predictive entropy, and probability margin have
+three separate charts**, each captioned with what it is not. There is no
+card named simply "Confidence" and no single combined uncertainty score.
+
+See `docs/DASHBOARD.md`.

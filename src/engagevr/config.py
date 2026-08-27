@@ -28,6 +28,7 @@ from engagevr.schemas.adaptation_policy import (
     ExperimentMode,
     RegressionBand,
 )
+from engagevr.schemas.dashboard import DashboardRunFamily
 from engagevr.schemas.fusion import (
     FusionConfiguration,
     FusionModality,
@@ -1675,6 +1676,104 @@ class UncertaintyConfig(BaseModel):
         )
 
 
+class DashboardConfig(BaseModel):
+    """Milestone 9 research-dashboard settings.
+
+    Every setting here controls **presentation and discovery**.  None of
+    them can change a scientific quantity, and the fields that would
+    matter most if they could — ``scientific_evaluation_eligible``,
+    ``is_synthetic``, confidence thresholds, the policy mapping, model
+    outputs — are deliberately absent.  Those come from artifacts, and a
+    configuration file is not evidence.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    #: Where the dashboard looks for run directories.
+    artifact_root: str = Field(
+        default="artifacts/experiments",
+        min_length=1,
+        description="Directory scanned for candidate run directories.",
+    )
+
+    #: Family the run selector starts on; ``None`` shows every family.
+    default_run_family: str | None = None
+
+    #: Whether to compare recorded checksums with the bytes on disk.
+    #: Switching this off does not make a mismatched run valid; it makes
+    #: the integrity status 'not checked', which is a different thing.
+    validate_checksums: bool = True
+
+    #: Rows one table renders before it reports how many it dropped.
+    max_table_rows: int = Field(default=1000, ge=1, le=100_000)
+
+    #: Whether pseudonymous subject identifiers appear in tables. They
+    #: are software-generated labels; this switch is an audit
+    #: convenience, not a privacy control, because there is nothing
+    #: personal in the artifacts to conceal.
+    show_subject_ids: bool = True
+
+    #: Bins used for every distribution chart.
+    histogram_bins: int = Field(default=20, ge=2, le=200)
+
+    #: Where the live and replay modes look for session recordings. Kept
+    #: separate from ``artifact_root``: a recorded session is not an
+    #: experiment run and the two catalogues never mix.
+    session_root: str = Field(
+        default="artifacts/sessions",
+        min_length=1,
+        description="Directory scanned for recorded sessions.",
+    )
+
+    #: Seconds between two automatic re-reads on the live-observation
+    #: page, and nowhere else: replay does not auto-advance and the
+    #: artifact observatory does not poll.  Must be finite and at least
+    #: two seconds — a research tool re-reading a file several times a
+    #: second spends its budget on filesystem traffic to produce an
+    #: animation.  What refreshes is a view of records another subsystem
+    #: already wrote; no inference runs on any cadence.
+    live_refresh_seconds: float = Field(
+        default=5.0, ge=2.0, le=3600.0, allow_inf_nan=False
+    )
+
+    #: Whether the live and replay pages offer the session-report export.
+    #: Switching it off removes the download control. It cannot alter what
+    #: a report would contain, because a report carries its provenance by
+    #: construction.
+    enable_session_report_export: bool = True
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.default_run_family is not None:
+            allowed = {family.value for family in DashboardRunFamily}
+            if self.default_run_family not in allowed:
+                raise ValueError(
+                    f"dashboard.default_run_family must be one of "
+                    f"{sorted(allowed)} or null, got "
+                    f"{self.default_run_family!r}"
+                )
+        for name in ("artifact_root", "session_root"):
+            value = getattr(self, name)
+            root = PurePosixPath(value)
+            if root.is_absolute():
+                raise ValueError(
+                    f"dashboard.{name} must be a repository-relative path "
+                    f"so a configuration file is portable, got {value!r}"
+                )
+            if ".." in root.parts:
+                raise ValueError(
+                    f"dashboard.{name} must not escape the repository with "
+                    f"'..', got {value!r}"
+                )
+        return self
+
+    def resolved_family(self) -> DashboardRunFamily | None:
+        """The configured default family, or ``None`` for all families."""
+        if self.default_run_family is None:
+            return None
+        return DashboardRunFamily(self.default_run_family)
+
+
 # --- Root model ---
 
 
@@ -1714,6 +1813,9 @@ class EngageVRConfig(BaseModel):
 
     # Milestone 7
     uncertainty: UncertaintyConfig = Field(default_factory=UncertaintyConfig)
+
+    # Milestone 9
+    dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
 
     @model_validator(mode="after")
     def _check_adaptation_agrees_with_task(self) -> Self:

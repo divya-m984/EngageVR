@@ -20,6 +20,9 @@ Usage::
     uv run python -m engagevr uncertainty-demo --target engagement_class --folds 5
     uv run python -m engagevr uncertainty-train --mode scientific --folds 5
     uv run python -m engagevr adaptation-demo --output artifacts/experiments/m8
+    uv run python -m engagevr dashboard --artifact-root artifacts/experiments
+    uv run python -m engagevr dashboard-check --artifact-root artifacts/experiments
+    uv run python -m engagevr dashboard-sessions --session demo-session
 
 All outputs from the ``demo``, ``rppg-demo``, ``task-sim``, ``features-demo``,
 ``baseline-demo``, ``fusion-demo``, ``personalization-demo``,
@@ -153,12 +156,14 @@ def _build_parser() -> argparse.ArgumentParser:
     from engagevr.cli_milestone6 import add_parsers as add_milestone6_parsers
     from engagevr.cli_milestone7 import add_parsers as add_milestone7_parsers
     from engagevr.cli_milestone8 import add_parsers as add_milestone8_parsers
+    from engagevr.cli_milestone9 import add_parsers as add_milestone9_parsers
 
     add_parsers(sub)
     add_milestone5_parsers(sub)
     add_milestone6_parsers(sub)
     add_milestone7_parsers(sub)
     add_milestone8_parsers(sub)
+    add_milestone9_parsers(sub)
     return parser
 
 
@@ -730,6 +735,16 @@ def main(argv: list[str] | None = None) -> int:
         from engagevr import cli_milestone8
 
         return cli_milestone8.run_adaptation_demo(args)
+
+    if args.command in ("dashboard", "dashboard-check", "dashboard-sessions"):
+        from engagevr import cli_milestone9
+
+        milestone9 = {
+            "dashboard": cli_milestone9.run_dashboard,
+            "dashboard-check": cli_milestone9.run_dashboard_check,
+            "dashboard-sessions": cli_milestone9.run_dashboard_sessions,
+        }
+        return milestone9[args.command](args)
 
     if args.command in ("serve", "task-sim", "session-inspect", "session-replay"):
         from engagevr import cli_milestone4
