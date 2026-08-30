@@ -606,3 +606,90 @@ dashboard:
   # contains: provenance, the disclaimer, and the software-self-check
   # banner are required fields of the report model.
   enable_session_report_export: true
+
+# --- Milestone 10: MLOps, packaging, and reproducibility ---
+#
+# OPERATIONAL SETTINGS ONLY. Nothing in this section can change a
+# scientific quantity. There is no setting that marks a run eligible for
+# scientific evaluation, no setting that promotes a model, and no setting
+# that relaxes a provenance tag. Reproducibility is not validity,
+# tracking is not validation, registration is not approval, packaging is
+# not production readiness, and a distribution-shift statistic is an
+# engineering diagnostic.
+mlops:
+  # Where the reproducible DVC pipeline writes. Deliberately outside
+  # dashboard.artifact_root: rebuilding the pipeline must not silently
+  # reshuffle the run catalogue a reader is looking at. artifacts/ is
+  # gitignored, so nothing here is committed.
+  pipeline_root: "artifacts/pipeline"
+
+  # Where the system smoke check writes its scratch output.
+  smoke_root: "artifacts/smoke"
+
+  mlflow:
+    # OPT-IN. Left false so that no Milestone 5-8 command starts writing
+    # to a tracking store as a side effect of being run. Tracking is a
+    # deliberate act; a run appearing in MLflow is bookkeeping, and it
+    # never makes that run validated, approved, or eligible.
+    enabled: false
+
+    # A repository-relative directory, which MLflow reads as a LOCAL FILE
+    # STORE. No server, no database, no account, no API key, and no
+    # network access is required. Remote schemes (http, https, databricks,
+    # s3, gs, azure) and database schemes (sqlite, postgresql) are refused
+    # at configuration load; see docs/MLOPS.md for why.
+    #
+    # "mlruns" and not "artifacts/mlflow": MLflow's file store rejects any
+    # run whose path contains a component named "artifacts" (a path-
+    # traversal defence) and then reports the runs it just wrote as
+    # missing. mlruns/ is already gitignored and is MLflow's own
+    # convention.
+    tracking_uri: "mlruns"
+
+    # Experiment name. It states what these runs are. Names carrying
+    # production, staging, champion, approved, or validated are refused.
+    experiment_name: "engagevr-software-self-check"
+
+    # Copy the run's JSON documents and checksums into the tracking store.
+    # Model binaries, webcam frames, face crops, session recordings, and
+    # raw media are NEVER logged.
+    log_artifacts: true
+
+  drift:
+    # ENGINEERING DIAGNOSTIC DEFAULTS. Not one of these was calibrated
+    # against an outcome, a participant, or an observed failure. They were
+    # chosen because they are the values conventionally used to make a
+    # statistic legible. Crossing one is an invitation to look at a
+    # feature, NOT a verdict about a model and NOT a statement about any
+    # person's engagement, attention, cognitive load, or psychological
+    # state.
+
+    # Present values required on BOTH sides before a statistic is
+    # computed. Below it the feature is reported unavailable with a
+    # reason, never as zero shift.
+    minimum_samples: 30
+
+    # Quantile bins of the reference distribution used by the PSI estimate.
+    histogram_bins: 10
+
+    # Absolute difference in per-feature missingness rate. Missingness is
+    # a measurement-availability fact, never disengagement.
+    missingness_rate_difference: 0.10
+
+    # |mean difference| / pooled standard deviation. 0.20 is the
+    # conventional "small effect" landmark, used here only as a legible
+    # reference point.
+    standardized_mean_difference: 0.20
+
+    # Two-sample Kolmogorov-Smirnov statistic (the maximum absolute
+    # difference between the two empirical CDFs).
+    kolmogorov_smirnov: 0.10
+
+    # Population Stability Index. 0.20 is the conventional "investigate"
+    # landmark from credit-risk practice; it has no standing here beyond
+    # being a widely recognised number.
+    population_stability_index: 0.20
+
+    # Total variation distance between two categorical distributions:
+    # half the sum of absolute differences in category share.
+    categorical_total_variation: 0.10

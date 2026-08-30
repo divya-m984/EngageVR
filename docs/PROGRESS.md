@@ -1,9 +1,13 @@
 # EngageVR -- Progress Tracker
 
-## Current Milestone: 9 -- Research Dashboard
+## Current Milestone: 10 -- MLOps and Packaging
 
-**Status:** Milestone 9 research dashboard implementation complete; scientific
-evaluation and human-subject validation remain pending.
+**Status:** Milestone 10 implementation **locally complete**; GitHub-hosted CI
+acceptance **pending branch push**. Scientific evaluation and human-subject
+validation remain pending. Nothing in this milestone produces evidence:
+reproducibility is not validity, tracking is not validation, registration is
+not approval, packaging is not production readiness, and drift alerts are
+engineering diagnostics.
 
 ## Milestone History
 
@@ -1185,7 +1189,177 @@ configured interval, where it previously refreshed only on request.
 
 ### Milestone 10: MLOps and Packaging
 
-**Status:** Not started
+**Started:** 2026-08-29
+**Completed (implementation):** 2026-08-29
+
+**Status:** Milestone 10 implementation **locally complete**;
+GitHub-hosted CI acceptance **pending branch push**. Three of the four
+PROJECT_PLAN acceptance criteria are met and verified locally; "CI passes"
+cannot be claimed until the repository owner commits and pushes and the
+workflow actually runs on GitHub-hosted runners. Scientific evaluation and
+human-subject validation remain PENDING and are unaffected by anything in
+this milestone.
+
+**Objective (PROJECT_PLAN, verbatim):** "MLflow, DVC stages, Docker, GitHub
+Actions, model versioning, drift checks, system smoke tests, release
+instructions."
+
+**Acceptance criteria (PROJECT_PLAN, verbatim):**
+- [x] Clean clone can reproduce the demo
+- [ ] CI passes -- workflow syntax and every command verified locally;
+      **GitHub-hosted runner execution pending branch push**. This may be
+      marked complete once GitHub Actions actually passes.
+- [x] Model artifact and configuration are versioned
+- [x] Dockerized backend and dashboard work
+
+**Deliverables:**
+- [x] `src/engagevr/schemas/mlops.py` -- every persisted M10 record, versioned
+      and strict (`extra="forbid"`), with the refusals built in
+- [x] `src/engagevr/mlops/fingerprints.py` -- canonical hashing for
+      configuration, splits, and feature schemas
+- [x] `src/engagevr/mlops/model_version.py` -- immutable, checksum-linked
+      model versions; no model file is ever loaded
+- [x] `src/engagevr/mlops/mlflow_tracking.py` -- the one module that knows
+      MLflow exists; opt-in, local, lazily imported
+- [x] `src/engagevr/mlops/drift.py` -- five interpretable distribution-shift
+      diagnostics
+- [x] `src/engagevr/mlops/pipeline.py` -- the stage definitions `dvc.yaml`
+      and `mlops-demo` share
+- [x] `src/engagevr/mlops/reproducibility.py` -- logical identity across
+      executions
+- [x] `src/engagevr/mlops/stage_record.py` -- the deterministic,
+      DVC-declared representation of a stage (the orchestration boundary
+      that keeps `dvc.lock` byte-stable, DEC-104)
+- [x] `src/engagevr/mlops/execution.py` -- volatile execution metadata,
+      written to a sidecar that is never a DVC output
+- [x] `src/engagevr/mlops/smoke.py` -- the 13-check integrated software
+      self-check
+- [x] `src/engagevr/cli_milestone10.py` -- `mlops-demo`, `model-manifest`,
+      `drift-check`, `mlflow-log`, `repro-manifest`, `stage-record`,
+      `system-smoke`
+- [x] `engagevr --version`, from one source of truth
+- [x] `mlops:` section in `configs/defaults.yaml`
+- [x] `dvc.yaml`, `params.yaml`, `.dvcignore`, `.dvc/config`
+- [x] `Dockerfile.backend`, `Dockerfile.dashboard`, `docker-compose.yml`,
+      `.dockerignore`
+- [x] `.github/workflows/ci.yml` extended: `check`, `smoke`, `docker`
+- [x] `Makefile`: `smoke`, `mlops-demo`, `dvc-dag`, `dvc-repro`,
+      `docker-build`, `docker-up`, `docker-down`, `release-check`,
+      `clean-mlops`
+- [x] `docs/MLOPS.md`, `docs/RELEASE.md`
+
+**Dependencies added:** `mlflow-skinny>=3.15,<4` and `dvc>=3.67,<4`. Both
+local, neither cloud. The full `mlflow` distribution was rejected because it
+pins `pandas<3` and would downgrade this project's pandas across a major
+version to satisfy a bookkeeping layer (DEC-096). One consequence is
+recorded rather than hidden: `mlflow-skinny` caps `protobuf<7`, so protobuf
+moved 7.36.0 to 6.33.6, verified against the whole existing suite before the
+dependency was kept.
+
+**DVC lockfile stability (corrected 2026-08-29):**
+
+The first implementation declared the Milestone 5-8 run directories and the
+timestamped dataset metadata as DVC outputs, so a fresh `dvc repro` rewrote
+`dvc.lock` on every execution. That was recorded as acceptable and it was
+not: a tracked file that changes on every run stops carrying information.
+
+Corrected by an orchestration boundary (DEC-104) rather than by stripping
+timestamps from artifacts that legitimately carry them. The runner output
+stays intact and is no longer declared; a deterministic stage record is
+declared in its place, pinning the run id and checksumming only byte-stable
+files. Milestone 10's own documents now carry no wall clock at all, with the
+execution timestamp written to a `.execution.json` sidecar that is never
+declared.
+
+Measured after the correction:
+- Every one of the **21 DVC-declared outputs** is byte-identical across two
+  fresh executions (before: 20 of 56 pipeline files were unstable).
+- `dvc.lock` is byte-identical across two fresh reproductions in the working
+  tree AND across two **independent source-only trees**, each `uv sync
+  --locked` then `uv run dvc repro` from scratch. A second `dvc repro` in
+  each tree skipped all eight stages and left the digest unchanged.
+  (The digest itself is a function of the source and is deliberately not
+  quoted in living documentation; `make dvc-verify` recomputes and compares
+  it in one command.)
+- Cross-tree: logical fingerprint, configuration fingerprint, all four stage
+  identities, all ten model-version identifiers, and the drift report
+  fingerprint are identical; the whole reproducibility manifest is equal
+  byte for byte. The `.execution.json` sidecars correctly DIFFER, which is
+  the evidence that the wall clock was relocated rather than deleted.
+- A meaningful change still propagates: altering `metrics.json` changes the
+  stage record, the logical fingerprint, and the lock.
+
+**What was verified, with numbers:**
+- Full suite: **3680 passed, 10 skipped**. The 10 skips are the opt-in
+  hardware test (1) and the opt-in two-source-tree DVC proof (9); both were
+  run explicitly and pass. Before this milestone the baseline was 3241
+  passed, 1 skipped.
+- `uv run ruff format --check`, `uv run ruff check`, `uv run mypy src`: clean.
+- `uv run dvc repro` from clean outputs: 8 stages, all succeeded.
+- A second `uv run dvc repro`: every stage "didn't change, skipping";
+  `dvc status` reports "Data and pipelines are up to date".
+- Two independent executions from clean output directories: identical
+  logical fingerprint, identical dataset fingerprints, run identifiers,
+  model-version identifiers, drift report fingerprint, and every
+  byte-deterministic checksum. `repro-manifest --compare` exits 0.
+- Clean-clone simulation: a source-only copy (no `.git`, `.venv`,
+  `artifacts/`, `mlruns/`, `dvc.lock`, or cache) reproduced the demo from
+  scratch -- `uv sync --locked`, `dvc repro` (8 stages), `system-smoke`
+  (13 passed) -- and produced the **same** logical and configuration
+  fingerprints as the working tree.
+- `system-smoke`: 13 passed, 0 failed, 0 skipped.
+- Opt-in two-source-tree proof: **9 passed in 405 s**
+  (`ENGAGEVR_RUN_DVC_SYSTEM_TESTS=1 uv run pytest -m dvc_system`).
+- `mlflow-log` on two runs: local `file://.../mlruns` store, 180 and 42
+  metrics, 9 and 13 artifacts, 0 skipped metrics, `is_synthetic=true`,
+  `scientific_evaluation_eligible=false`, `registered model: none`.
+- Drift on the pipeline's two synthetic draws: 131 features compared, 4 over
+  an engineering diagnostic default, 1 unavailable (a string-valued column,
+  correctly reported as a type mismatch rather than as zero shift).
+- Docker: both images built with a plain `docker build` (no BuildKit),
+  `docker compose config` valid, both containers reached `healthy`,
+  `/health`, `/version`, and `/_stcore/health` all answered on loopback,
+  image contents verified to hold no generated or private state, stack torn
+  down with no container left running.
+- Protocol drift: `scripts/generate_protocol_artifacts.py` followed by
+  `git diff --exit-code -- protocol/` -- **no drift**. The Milestone 4 wire
+  protocol is unchanged.
+
+**Decisions recorded:** DEC-096 through DEC-104 (see `docs/DECISIONS.md`).
+DEC-100 was revised on 2026-08-29: `dvc.lock` is tracked **and byte-stable**,
+where an earlier revision accepted a lock that churned on every reproduction.
+DEC-104 records the boundary that makes the stability possible.
+
+**Known limitations (see `docs/LIMITATIONS.md`):**
+1. Every number this milestone touches came from synthetic data. It is a
+   software self-check, not evidence, and no artifact it produces is
+   scientifically eligible.
+2. The drift thresholds are engineering diagnostic defaults. None was
+   calibrated against an outcome, a participant, or an observed failure.
+3. The drift layer has never been run against real data, real drift, or a
+   real deployment. It has only ever compared two synthetic draws.
+4. Reproducibility was demonstrated on one machine, one operating system,
+   and one Python build. Cross-platform reproducibility is untested.
+5. The Docker images were built and health-checked locally. They have never
+   been run under load, over time, or by anyone else, and packaging is not
+   production readiness.
+6. CI's behaviour on GitHub-hosted runners cannot be proven from this
+   repository; only the workflow's structure and each command in isolation
+   were verified locally. **The PROJECT_PLAN criterion "CI passes" is
+   therefore NOT claimed**; it becomes claimable once the branch is pushed
+   and the workflow runs.
+7. `mlflow-skinny`'s file store is in maintenance mode upstream. The `<4`
+   bound is the guard; revisiting it is future work.
+8. No model is registered, promoted, approved, or validated, and no MLOps
+   record in this repository can be read as saying otherwise.
+
+**Remaining validation for this milestone:**
+1. Run the CI workflow on GitHub-hosted runners. This is the one
+   PROJECT_PLAN acceptance criterion still open.
+2. Reproduce the demo on a second operating system and a second Python
+   build.
+3. Have somebody who did not write this milestone follow
+   `docs/RELEASE.md` end to end from a genuinely clean clone.
 
 ### Milestone 11: Research Documentation
 

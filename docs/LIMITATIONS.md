@@ -878,3 +878,194 @@ participant-labelled cognitive-load dataset, human-subject evaluation of
 adaptation, physical-webcam validation, UBFC-rPPG evaluation, and Unity
 compilation and runtime validation all remain outstanding. Building a
 dashboard over synthetic runs did not advance any of them.
+
+## Milestone 10: MLOps, packaging, and reproducibility
+
+### Nothing in this milestone produces evidence
+
+Milestone 10 is an operational layer. It makes the existing work
+reproducible, trackable, versioned, diagnosable, packaged, and releasable.
+It adds no model, no metric, and no finding.
+
+Five sentences bound every claim it can support:
+
+- **Reproducibility is not validity.** Obtaining the same numbers twice
+  says the pipeline is deterministic. It says nothing about whether the
+  numbers describe anything real.
+- **Tracking is not validation.** A run appearing in MLflow is a row in a
+  local file store. It has not been reviewed, evaluated, or approved.
+- **Registration is not approval.** Nothing here is registered, and if it
+  were, a registry entry would still be bookkeeping.
+- **Packaging is not production readiness.** A Docker image that starts
+  and answers a health check is software that starts. It is not a
+  deployment, not a service, and not fit for anyone's use.
+- **Drift alerts are engineering diagnostics.** A threshold crossing is an
+  invitation to look at a feature.
+
+### Every artifact this milestone produces is synthetic and ineligible
+
+Every dataset the pipeline generates comes from this repository's own
+generator, from a known latent process. No person was recorded, no
+participant provided a label, and every record carries
+`scientific_evaluation_eligible=false` and
+`SOFTWARE SELF-CHECK — NOT SCIENTIFIC EVALUATION`.
+
+The schemas refuse to record anything else: a synthetic document cannot
+carry `scientific_evaluation_eligible=true`, and Pydantic raises if one
+tries.
+
+### Drift thresholds are engineering diagnostic defaults
+
+`missingness_rate_difference` 0.10, `standardized_mean_difference` 0.20,
+`kolmogorov_smirnov` 0.10, `population_stability_index` 0.20,
+`categorical_total_variation` 0.10, `minimum_samples` 30,
+`histogram_bins` 10.
+
+**Not one was calibrated against an outcome, a participant, or an observed
+failure.** 0.20 for the standardized mean difference is the conventional
+"small effect" landmark; 0.20 for PSI is the conventional "investigate"
+landmark from credit-risk practice. They were chosen because they are
+legible, not because they were measured to be right here.
+
+### A distribution shift is not a diagnosis
+
+A feature distribution shift is not model degradation. A prediction
+distribution shift is not concept drift — establishing concept drift needs
+labels from both periods, and no validated participant-provided
+engagement or cognitive-load label exists in this repository. Neither is
+a change in anyone's engagement, attention, cognitive load, fatigue, or
+psychological state.
+
+Missingness is a **measurement-availability** fact. A feature that stopped
+arriving is a measurement that stopped arriving. It is never
+disengagement, and the report says so in every missingness statistic's
+interpretation.
+
+### The drift layer has never seen real data
+
+It has compared two synthetic draws from the same generator, and
+deliberately shifted synthetic columns in tests. It has never been run
+against real capture data, real distributional change, real model
+degradation, or a real deployment. Its behaviour under any of those is
+unknown.
+
+### Reproducibility was demonstrated on one machine
+
+Two independent executions, and two independent source-only trees, on one
+machine, one operating system (Arch Linux), one Python build (3.12.13),
+one library set. That demonstrates the pipeline is deterministic with
+respect to its own inputs. It does **not** demonstrate cross-platform,
+cross-architecture, or cross-version reproducibility, none of which has
+been attempted.
+
+Within that scope the property is byte-for-byte, not merely logical:
+every DVC-declared output is byte-identical across fresh executions, and
+so is `dvc.lock`. That holds because the timestamped Milestone 5--8
+provenance is deliberately **not** DVC-declared, not because it was
+removed — a run still records when it happened, and a deterministic stage
+record is declared in the run directory's place (DEC-104).
+
+Two consequences worth stating plainly. First, the guarantee is scoped to
+"same source, same `uv.lock`, same configuration, same seed, same
+parameters"; change any of those and the lock changes, which is the
+mechanism working. Second, a file this repository has not classified as
+timestamped is checksummed by default, so a *new* volatile output would
+surface as a failing two-execution test rather than as silent churn —
+which is the failure mode to prefer, but it does mean the classification
+list is a thing to maintain.
+
+### A model version is not an approval
+
+`ModelVersionManifest` records where an estimator came from, which bytes
+it is, and what may be said about it. There is no field for a stage, an
+alias, a promotion, or an approval, because nobody has made that decision
+about any model here.
+
+No model in this repository has been evaluated against a real participant
+label. No model is production-ready, validated, approved, or a champion,
+and the schema rejects those words.
+
+Model files remain Python pickles: loading one executes code in it.
+Nothing in Milestone 10 loads one; versioning hashes bytes.
+
+### A passing smoke check is a wiring check
+
+Thirteen checks that the software components interoperate. A pass means
+the package imports, the configuration parses, the pipeline runs, the
+artifacts validate, tracking works locally, the diagnostics run, the
+catalogue discovers the run, the backend application can be constructed,
+and the dashboard module imports.
+
+It does **not** mean any model is accurate, calibrated, useful, or
+validated. The smoke run deliberately fits two estimators with one
+permutation repeat and no ablations: statistical adequacy is irrelevant
+to the question it asks.
+
+The backend check constructs the FastAPI application and inspects its
+routes; it never binds a socket. The dashboard check builds the launch
+argv; it never starts Streamlit. Neither is a test that the running
+service behaves.
+
+### The Docker images are unvalidated packaging
+
+Both images were built locally with a plain `docker build`, started under
+`docker compose`, reached `healthy`, answered their health routes on
+loopback, and were verified to contain no generated or private state.
+
+They have never been run under load, over time, on another host, or by
+anyone else. Neither service has authentication, authorisation, or
+transport encryption, and both are published to `127.0.0.1` only for that
+reason. **Exposing either to a network would publish an unauthenticated
+bridge and a filesystem browser for the artifact root.**
+
+There is no model-serving API in either image, because there is no
+validated model to serve.
+
+### CI has not yet run, and the acceptance criterion is not claimed
+
+Each command in `.github/workflows/ci.yml` was run locally and the
+workflow's structure is asserted by tests. Whether GitHub-hosted runners
+behave the same way can only be established by pushing the branch.
+
+**The PROJECT_PLAN acceptance criterion "CI passes" is therefore open, not
+met.** It becomes claimable once the repository owner commits, pushes, and
+the workflow actually passes. Local validation is not a substitute, and
+`docs/PROGRESS.md` records the criterion as unchecked.
+
+CI passing would not imply scientific validity in any case: every dataset
+those jobs touch is synthetic.
+
+### The MLflow file store is in maintenance mode upstream
+
+MLflow 3.15 deprecates the filesystem tracking backend and raises unless
+`MLFLOW_ALLOW_FILE_STORE` is set. This project sets it for the duration of
+one client call because the alternative — a SQLAlchemy backend — needs
+the full `mlflow` distribution, which pins `pandas<3` and would downgrade
+this project's pandas across a major version.
+
+The bound `mlflow-skinny<4` is the guard against MLflow 4 removing the
+file store. This is a known dependency risk, not a present defect, and
+revisiting it is future work.
+
+### Not implemented in Milestone 10
+
+- Model registry, staging, promotion, aliases, or approval workflows.
+- A model-serving or inference API.
+- Automatic tracking inside any Milestone 5-8 runner.
+- An MLflow server, a tracking database, or a UI.
+- A DVC remote, or any cloud storage.
+- Cloud deployment, orchestration, autoscaling, or multi-node anything.
+- Monitoring, alerting, paging, or on-call anything. The drift layer is a
+  diagnostic run on request; it watches nothing.
+- Automated GitHub Release creation, tagging, or publishing.
+- Cross-platform or cross-architecture reproducibility.
+
+### No scientific, medical, psychological, or effectiveness claim
+
+Nothing in this milestone establishes that any engagement estimate,
+cognitive-load estimate, uncertainty interval, abstention decision, or
+adaptation proposal corresponds to anything about a person. Signal quality
+remains distinct from confidence, classification confidence remains
+distinct from regression intervals, and adaptation activity remains
+distinct from adaptation benefit. Milestone 10 changed none of those
+distinctions and cannot.

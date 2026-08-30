@@ -955,6 +955,59 @@ software-self-check banner are required fields of the report model.
 the policy mapping, or model outputs. Dashboard configuration cannot alter a
 scientific calculation, and it cannot override artifact provenance.
 
+## 27a. Milestone 10 operational interaction
+
+Milestone 10 changed nothing about this dashboard. It uses it in two
+places, both through interfaces that already existed.
+
+**The pipeline's `integrity` stage runs `dashboard-check`.**
+
+```bash
+uv run python -m engagevr dashboard-check \
+  --artifact-root artifacts/pipeline/experiments --json \
+  > artifacts/pipeline/mlops/catalogue.json
+```
+
+That is the server-free catalogue of §6, pointed at a different artifact
+root and asked for JSON. It classifies each run by artifact signature,
+reports status and integrity, verifies checksums, and starts nothing. The
+Milestone 10 reproducibility manifest folds the resulting run identifiers,
+families, statuses, integrity states, and eligibility flags into its
+logical identity, so a pipeline whose runs stopped being discoverable
+would change the fingerprint.
+
+**The system smoke check builds the catalogue in-process** and asserts
+that the run it just produced is discovered, classified as `baseline`,
+reported `completed`, verified `valid`, and — importantly —
+**still ineligible**. A catalogue that reported a synthetic run as
+scientifically eligible would fail the smoke check.
+
+**The pipeline writes outside `dashboard.artifact_root`.**
+`mlops.pipeline_root` defaults to `artifacts/pipeline`, and the
+configuration refuses to let the pipeline root and the smoke root be the
+same path. Rebuilding the demo must not silently reshuffle the run
+catalogue somebody is reading (DEC-102). To inspect pipeline runs in the
+browser, point the dashboard at them explicitly:
+
+```bash
+uv run python -m engagevr dashboard --artifact-root artifacts/pipeline/experiments
+```
+
+**The containerised dashboard mounts both roots read-only.**
+`docker-compose.yml` mounts `artifacts/experiments` and
+`artifacts/sessions` with `:ro`, which makes the read-only guarantee of
+§21 a filesystem fact as well as a code property. The image starts
+headless, opens no browser, gathers no usage statistics, runs as a
+non-root user, and publishes its port to `127.0.0.1` only — this tool has
+no authentication, and exposing it would publish a filesystem browser for
+the artifact root. See `docs/MLOPS.md` §10 and DEC-103.
+
+The import-boundary test of §21 is unchanged and still forbids the
+dashboard from importing `mlflow`, `dvc`, `docker`, `joblib`, `pickle`,
+`sklearn`, `subprocess`, any runner, or `asyncio`. No Milestone 10 module
+is imported by the dashboard, and the dependency runs one way only:
+Milestone 10 reads the dashboard's catalogue, never the reverse.
+
 ## 28. Testing
 
 889 tests, none of which requires a webcam, MediaPipe asset, Unity, network

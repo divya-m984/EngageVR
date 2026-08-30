@@ -417,6 +417,78 @@ names** (DEC-084). A directory that exists is not a successful run: the
 catalogue distinguishes completed, failed, incomplete, corrupt, unsupported,
 and unknown. See `docs/DASHBOARD.md`.
 
+### 9a. MLOps and Packaging Layer (`src/engagevr/mlops/`)
+
+The operational layer added by Milestone 10. It **orchestrates and
+records**; it never models. Every pipeline stage invokes a Milestone 5-9
+subcommand through the public CLI, so there is no second training
+pipeline, fusion implementation, uncertainty engine, adaptation
+controller, or dashboard anywhere in it.
+
+```
+source + config + synthetic generators
+              |
+        reproducible DVC stages          dvc.yaml, params.yaml
+              |
+       persisted experiment artifacts    (Milestones 5-8, UNCHANGED)
+              |
+       MLflow experiment-tracking        mlops/mlflow_tracking.py
+              |
+       versioned model/artifact records  mlops/model_version.py
+              |
+        drift / system verification      mlops/drift.py, mlops/smoke.py
+              |
+       Docker / CI / release workflow
+```
+
+| Module | Responsibility |
+|--------|---------------|
+| `schemas/mlops.py` | Every persisted M10 record, versioned and strict |
+| `mlops/fingerprints.py` | Canonical hashing for configuration, splits, feature schemas |
+| `mlops/model_version.py` | Immutable, checksum-linked model versions |
+| `mlops/mlflow_tracking.py` | The only module that knows MLflow exists |
+| `mlops/drift.py` | Five interpretable distribution-shift diagnostics |
+| `mlops/pipeline.py` | Stage definitions shared by `dvc.yaml` and `mlops-demo` |
+| `mlops/reproducibility.py` | Logical identity across executions |
+| `mlops/stage_record.py` | The deterministic, DVC-declared representation of a stage |
+| `mlops/execution.py` | Volatile execution metadata, in a never-declared sidecar |
+| `mlops/smoke.py` | The 13-check integrated software self-check |
+| `cli_milestone10.py` | `mlops-demo`, `model-manifest`, `drift-check`, `mlflow-log`, `repro-manifest`, `system-smoke` |
+
+Two boundaries carry the design.
+
+**Nothing mutates an existing artifact.** Tracking and versioning read a
+run directory and write separate records elsewhere; a run that has been
+logged is byte-identical to one that has not, which is what makes the
+checksums a version record carries mean anything.
+
+**Nothing confers scientific status.** Reproducibility is not validity,
+tracking is not validation, registration is not approval, packaging is not
+production readiness, and a distribution-shift statistic is an engineering
+diagnostic. The schemas refuse to record anything stronger: a synthetic
+document cannot carry `scientific_evaluation_eligible=true`, and no record
+may contain `production`, `staging`, `champion`, `approved`, or
+`validated` as a status word.
+
+Tracking is **opt-in** (`mlops.mlflow.enabled: false`) and local: a file
+store at `mlruns/`, no server, no database, no account, no network.
+Importing the adapter does not import `mlflow`. See `docs/MLOPS.md` and
+DEC-096 through DEC-103.
+
+Outputs land under `mlops.pipeline_root` (`artifacts/pipeline`),
+deliberately outside `dashboard.artifact_root`, so rebuilding the demo
+never reshuffles the run catalogue a reader is looking at (DEC-102).
+
+**Deterministic outputs are separated from volatile execution metadata**
+(DEC-104). The Milestone 5-8 runners keep writing timestamped provenance —
+`started_at_utc`, `finished_at_utc`, `created_at_utc` — and those
+documents are simply never DVC-declared. A deterministic stage record is
+declared in their place, pinning the run id and checksumming only
+byte-stable files, so `dvc.lock` is byte-identical across fresh
+reproductions while a genuine change to a metric still propagates. When
+each Milestone 10 document was produced lives in a `.execution.json`
+sidecar that is never an output.
+
 ### 9. Cross-Cutting Concerns
 
 | Module | Responsibility |
@@ -481,13 +553,13 @@ and unknown. See `docs/DASHBOARD.md`.
 | Deep learning | PyTorch (deferred) |
 | Dashboard | Streamlit 1.62 (native charts; **no Plotly**, DEC-085) |
 | Storage | JSON Lines (M4); Parquet, SQLite (deferred) |
-| Experiment tracking | MLflow (incremental) |
-| Data versioning | DVC (incremental) |
+| Experiment tracking | mlflow-skinny 3.15 (LOCAL file store, opt-in; DEC-096) |
+| Pipeline / data versioning | DVC 3.67 (no remote; outputs regenerated, DEC-100) |
 | Linting | Ruff |
 | Type checking | mypy |
 | Testing | pytest |
 | CI | GitHub Actions |
-| Containers | Docker (incremental) |
+| Containers | Docker: the existing M4 backend and M9 dashboard, loopback only (DEC-103) |
 | Game engine | Unity (C#, desktop first) |
 | Communication | WebSocket (websockets 17), protocol version 1.0 |
 

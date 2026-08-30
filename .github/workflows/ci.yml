@@ -1,13 +1,28 @@
 name: CI
 
+# Every job below runs from a clean checkout with LOCKED dependencies and
+# NO SECRETS. Nothing here reads an external dataset, a participant
+# recording, a pre-existing artifact directory, a tracking server, or any
+# path on a contributor's machine. The hardware suite is never run: it is
+# opt-in behind ENGAGEVR_RUN_HARDWARE_TESTS and needs a physical webcam.
+#
+# CI passing means the software builds and its checks hold. It is not
+# scientific validation: every dataset these jobs touch is SYNTHETIC and
+# every artifact they produce carries
+# scientific_evaluation_eligible=false.
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   check:
+    name: Lint, types, and the full test suite
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,8 +33,11 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      - name: Lock file is in sync with pyproject.toml
+        run: uv lock --check
+
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --locked
 
       - name: Format check
         run: uv run ruff format --check src tests
@@ -37,3 +55,178 @@ jobs:
         run: |
           uv run python scripts/generate_protocol_artifacts.py
           git diff --exit-code -- protocol/
+
+  smoke:
+    name: System smoke and DVC reproducibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # The integrated software self-check: imports, configuration, a
+      # synthetic dataset, the Milestone 5 pipeline, artifact integrity,
+      # a model version, LOCAL MLflow tracking, a drift diagnostic, the
+      # Milestone 9 catalogue, the backend application, and the dashboard
+      # module. No webcam, no network, no Unity, no browser, no server.
+      - name: System smoke
+        run: uv run python -m engagevr system-smoke
+
+      - name: DVC DAG
+        run: uv run dvc dag
+
+      # A clean checkout regenerates the whole demo from source. There is
+      # no DVC remote and nothing to pull.
+      - name: DVC repro from a clean checkout
+        run: uv run dvc repro
+
+      # A second repro must find nothing to do. Dependencies, parameters,
+      # and commands are what DVC compares, and none of them carries a
+      # timestamp.
+      - name: Second DVC repro does no work
+        run: |
+          uv run dvc repro 2>&1 | tee second-repro.log
+          if grep -qiE "^Running stage|Reproduced" second-repro.log; then
+            echo "A second 'dvc repro' re-ran a stage; the pipeline is not"
+            echo "stable with respect to its own declared dependencies."
+            exit 1
+          fi
+
+      # The invariant DEC-100 states: a FRESH reproduction leaves the
+      # tracked dvc.lock byte-identical. Every declared output is
+      # deterministic, and the timestamped Milestone 5-8 provenance is
+      # deliberately not declared (DEC-104). A difference here means a
+      # declared output stopped being byte-stable.
+      - name: dvc.lock is byte-stable across a fresh reproduction
+        run: |
+          sha256sum dvc.lock | tee lock-first.txt
+          rm -rf artifacts/pipeline
+          uv run dvc repro
+          sha256sum dvc.lock | tee lock-second.txt
+          if ! diff -q lock-first.txt lock-second.txt; then
+            echo "dvc.lock changed across a fresh reproduction."
+            echo "A DVC-declared output is not byte-stable. See DEC-104."
+            diff lock-first.txt lock-second.txt || true
+            exit 1
+          fi
+          git diff --exit-code -- dvc.lock
+
+      # Two independent executions must agree on LOGICAL identity:
+      # dataset fingerprints, run identifiers, model-version identifiers,
+      # the drift report fingerprint, and every byte-deterministic
+      # output. Timestamps and MLflow identifiers are excluded from
+      # identity by construction and are not compared.
+      - name: Logical reproducibility across two executions
+        run: |
+          cp artifacts/pipeline/mlops/reproducibility.json first-run.json
+          rm -rf artifacts/pipeline
+          uv run python -m engagevr mlops-demo
+          uv run python -m engagevr repro-manifest \
+            --output second-run.json \
+            --compare first-run.json
+
+      # Two independent source trees, the strongest form of the same
+      # check. Opt-in in local runs because it costs about six minutes;
+      # CI runs it because CI is where six minutes is affordable.
+      - name: Two independent source trees produce the same dvc.lock
+        run: ENGAGEVR_RUN_DVC_SYSTEM_TESTS=1 uv run pytest -m dvc_system -q
+
+      - name: Upload the smoke and reproducibility reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # SYNTHETIC software reports only: a smoke summary, a
+          # reproducibility manifest, and a distribution-shift
+          # diagnostic. No model binary, no dataset, no session
+          # recording, and no media is uploaded.
+          name: engagevr-synthetic-software-reports
+          path: |
+            artifacts/smoke/smoke_report.json
+            artifacts/pipeline/mlops/reproducibility.json
+            artifacts/pipeline/mlops/drift_report.json
+            artifacts/pipeline/mlops/catalogue.json
+          retention-days: 7
+          if-no-files-found: warn
+
+  docker:
+    name: Docker images build and the stack answers its health checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compose file is valid
+        run: docker compose config
+
+      - name: Build the backend image
+        run: docker build -f Dockerfile.backend -t engagevr-backend:local .
+
+      - name: Build the dashboard image
+        run: docker build -f Dockerfile.dashboard -t engagevr-dashboard:local .
+
+      # A built image must contain no generated experiment state, no
+      # model binary, no recording, and no local settings. .dockerignore
+      # is what enforces that; this is the check that it did.
+      - name: Images carry no generated or private state
+        run: |
+          for image in engagevr-backend:local engagevr-dashboard:local; do
+            docker run --rm --entrypoint python "$image" -c "
+          import pathlib, sys
+          root = pathlib.Path('/app')
+          forbidden = []
+          for path in root.rglob('*'):
+              if '.venv' in path.parts or not path.is_file():
+                  continue
+              name = path.name
+              if name.endswith(('.joblib', '.pkl', '.parquet', '.jsonl', '.mp4', '.avi', '.npy')):
+                  forbidden.append(str(path))
+              if name in ('.env', 'CLAUDE.local.md', 'dvc.lock'):
+                  forbidden.append(str(path))
+              if 'mlruns' in path.parts or 'experiments' in path.parts:
+                  forbidden.append(str(path))
+          if forbidden:
+              print('generated or private files found in the image:', forbidden)
+              sys.exit(1)
+          print('clean')
+          "
+          done
+
+      - name: Start the stack and wait for both health checks
+        run: |
+          mkdir -p artifacts/sessions artifacts/experiments
+          docker compose up -d
+          for _ in $(seq 1 40); do
+            backend=$(docker inspect --format '{{.State.Health.Status}}' engagevr-backend)
+            dashboard=$(docker inspect --format '{{.State.Health.Status}}' engagevr-dashboard)
+            echo "backend=$backend dashboard=$dashboard"
+            if [ "$backend" = "healthy" ] && [ "$dashboard" = "healthy" ]; then
+              exit 0
+            fi
+            if [ "$backend" = "unhealthy" ] || [ "$dashboard" = "unhealthy" ]; then
+              docker compose logs
+              exit 1
+            fi
+            sleep 3
+          done
+          docker compose logs
+          exit 1
+
+      - name: The backend answers on loopback
+        run: |
+          curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/health
+          curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/version
+
+      - name: The dashboard answers on loopback
+        run: |
+          curl --fail --silent --show-error --max-time 10 \
+            http://127.0.0.1:8501/_stcore/health
+
+      - name: Stop and remove the stack
+        if: always()
+        run: docker compose down --remove-orphans
