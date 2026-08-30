@@ -1,11 +1,10 @@
 # Local Experiment Tracking (Milestone 5)
 
-## Why not MLflow yet
+## Why the run directory is still the source of truth
 
-MLflow is a **Milestone 10** deliverable. Adding a tracking server, a
-backing store, and a UI now would introduce infrastructure before there is
-anything to track: this milestone produces synthetic self-check runs only,
-and no run in this repository has been fitted to a real label.
+Milestone 5 deferred MLflow with a stated reason, and Milestone 10 adopted
+it without displacing anything. The run directory remains the record; the
+tracking store is a **second, derived view of it**.
 
 A directory of JSON and Parquet is:
 
@@ -14,11 +13,84 @@ A directory of JSON and Parquet is:
 - reproducible from the manifest alone;
 - free of a schema migration when the pipeline changes.
 
-When Milestone 10 introduces MLflow, these documents are what it will log.
-Nothing here needs to be discarded to adopt it.
+Milestone 10 logs exactly these documents. Nothing was discarded to adopt
+it, and nothing was recomputed on the way through: every metric MLflow
+holds was already computed and already persisted by the runner that
+produced it, which is what keeps the tracked value and the artifact value
+the same number.
 
-No MLflow file is produced by this milestone, and a test asserts that none
-appears in a run directory.
+## MLflow (Milestone 10): opt-in, local, and derived
+
+**Tracking is off by default.** `mlops.mlflow.enabled` is `false` in
+`configs/defaults.yaml`, and no Milestone 5-8 command imports the adapter,
+calls it, or starts a store. Importing
+`engagevr.mlops.mlflow_tracking` does not even import `mlflow`; the client
+is imported inside the functions that need it, and a test asserts this in
+a subprocess.
+
+**No MLflow file is produced by a Milestone 5-8 run**, and the tests
+asserting that no `mlruns`, `MLmodel`, or `meta.yaml` appears in a run
+directory still pass unchanged. A further test hashes a whole run
+directory before and after logging it and asserts equality: tracking a run
+leaves it byte-identical.
+
+Tracking happens when you ask:
+
+```
+uv run python -m engagevr mlflow-log --run artifacts/experiments/<run>
+uv run python -m engagevr mlops-demo --mlflow
+```
+
+The store is a **local MLflow file store** at `file://<repo>/mlruns` — no
+server, no database, no account, no API key, no network. Remote and
+database schemes are refused at configuration load.
+
+Every tracked run carries eight required provenance tags, including
+`engagevr.is_synthetic=true`, `engagevr.scientific_evaluation_eligible=false`,
+and `engagevr.disclaimer` = `SOFTWARE SELF-CHECK — NOT SCIENTIFIC
+EVALUATION`. **Nothing is registered**: `MLOpsRunSummary.registered_model`
+is typed `None`. A run in a tracking store is bookkeeping, not an
+approval.
+
+Model binaries, media, and credentials are never logged. See
+`docs/MLOPS.md` §3 for the full contract, and DEC-096.
+
+## The run directory is not a DVC output (Milestone 10)
+
+Milestone 10's pipeline reproduces these run directories, but it does
+**not** declare them as DVC outputs. `manifest.json` records
+`started_at_utc` and `finished_at_utc`, `dataset.json` copies the
+dataset metadata's `created_at_utc`, and `checksums.json` digests both —
+so declaring the directory would rewrite `dvc.lock` on every
+reproduction, and a tracked file that changes every run stops carrying
+information.
+
+Nothing here changed to accommodate that. The manifest still records both
+timestamps, because a run did happen at a time. What Milestone 10 declares
+instead is a *deterministic stage record* that pins this run's `run_id`
+and checksums every byte-stable file the run wrote — `metrics.json`,
+`splits.json`, `calibration.json`, the Parquet tables, and every
+`models/*.joblib`. The timestamped documents are listed there by path and
+reason, without a checksum.
+
+A real change still propagates: alter `metrics.json` and the record's
+checksum for it changes, so the lock changes. See DEC-104 and
+`docs/MLOPS.md` §6.
+
+## Model versions (Milestone 10)
+
+A run directory records what happened. A **model version** records one
+serialized estimator inside it: where it came from, which bytes it is, and
+what may be said about it — with a deterministic identifier derived from
+exactly that content.
+
+```
+uv run python -m engagevr model-manifest --run <run dir> --output <dir> --verify
+```
+
+It reads the run and writes elsewhere; it never modifies the run and never
+loads a model file. There is no stage, alias, promotion, or approval
+field. See `docs/MLOPS.md` §4 and DEC-097.
 
 ## Run directory layout
 

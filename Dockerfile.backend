@@ -1,0 +1,99 @@
+# EngageVR local backend (Milestone 4), containerised (Milestone 10).
+#
+# This image runs the EXISTING backend -- `engagevr serve`, the FastAPI +
+# WebSocket bridge in src/engagevr/api/ -- and nothing else. Milestone 10
+# does not invent a model-serving API: there is no inference endpoint
+# here, because there is no validated model to serve.
+#
+# SCOPE AND SECURITY
+# ------------------
+# The application has NO authentication, NO authorisation, and NO
+# transport encryption. It is a local research bridge. The container
+# binds 0.0.0.0 because a container's loopback is not reachable from the
+# host, and docker-compose.yml therefore publishes it to 127.0.0.1 only.
+# Do not expose this port to a network.
+#
+# Packaging is not production readiness. A built image says the software
+# starts; it says nothing about whether any estimate it carries is valid.
+
+# ---------------------------------------------------------------- builder
+FROM python:3.12-slim-bookworm AS builder
+
+# Pinned by digest-free tag on purpose: the reproducibility guarantee this
+# project makes is uv.lock, which pins every Python dependency exactly.
+COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /uvx /bin/
+
+# No BuildKit cache mounts: they would make these images buildable
+# only by a daemon with buildx, and a packaging milestone whose
+# images cannot be built by a plain `docker build` has packaged
+# nothing. Layer ordering already keeps rebuilds cheap.
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_NO_CACHE=1 \
+    UV_PROJECT_ENVIRONMENT=/app/.venv
+
+WORKDIR /app
+
+# Dependencies first, so a source-only change does not re-resolve them.
+# --locked refuses to update uv.lock: if the lock and pyproject.toml
+# disagree, the build fails rather than silently installing something
+# else.
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --locked --no-dev --no-install-project
+
+COPY src ./src
+RUN uv sync --locked --no-dev
+
+# ---------------------------------------------------------------- runtime
+FROM python:3.12-slim-bookworm AS runtime
+
+# OpenCV and MediaPipe are declared dependencies of the project and are
+# imported by the capture code paths. The backend does not use them, but
+# an image whose interpreter cannot import its own installed packages is
+# a trap for the next person, so the two shared libraries they need are
+# present. Nothing here opens a camera: there is no device in the image.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y \
+        libgl1 \
+        libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root. The backend writes only into the session root, which is a
+# mounted volume owned by this user.
+RUN useradd --create-home --uid 10001 engagevr
+
+ENV PATH="/app/.venv/bin:${PATH}" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+COPY --from=builder --chown=engagevr:engagevr /app/.venv /app/.venv
+COPY --chown=engagevr:engagevr src ./src
+COPY --chown=engagevr:engagevr configs ./configs
+COPY --chown=engagevr:engagevr protocol ./protocol
+COPY --chown=engagevr:engagevr pyproject.toml README.md ./
+
+# Session recordings are written here. Empty in the image: no recording,
+# no dataset, no model binary, no experiment artifact, and no secret is
+# ever baked in. See .dockerignore.
+RUN mkdir -p /app/artifacts/sessions && chown -R engagevr:engagevr /app/artifacts
+
+USER engagevr
+
+EXPOSE 8000
+
+# The application's own liveness route. urllib rather than curl, so the
+# image needs no extra package to check itself.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"
+
+# --allow-public-bind is required by the configuration model before the
+# server may bind anything other than loopback. It is explicit here
+# because binding 0.0.0.0 INSIDE a container is the only way the host can
+# reach it; compose publishes the port to 127.0.0.1 only.
+CMD ["python", "-m", "engagevr", "serve", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--allow-public-bind", \
+     "--session-root", "/app/artifacts/sessions"]

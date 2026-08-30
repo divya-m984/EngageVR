@@ -8,8 +8,9 @@
 
 ## Status
 
-**Milestone 9 research dashboard implementation complete; scientific
-evaluation and human-subject validation remain pending.**
+**Milestone 10 implementation locally complete; GitHub-hosted CI acceptance
+pending branch push. Scientific evaluation and human-subject validation
+remain pending.**
 
 Implemented: webcam capture, face landmarks (MediaPipe), behavioural proxy
 features, capture quality, a classical rPPG pipeline (GREEN / CHROM / POS,
@@ -39,15 +40,23 @@ research dashboard (Streamlit) that discovers experiment runs by artifact
 signature, verifies their checksums, renders baseline, fusion,
 personalization, uncertainty, and adaptation artifacts with their recorded
 provenance on every page, observes and replays recorded task sessions
-without writing to them, and exports a deterministic session report.
+without writing to them, and exports a deterministic session report; and --
+new in Milestone 10 -- an operational layer that adds **no modelling**:
+an eight-stage DVC pipeline that reproduces a deterministic synthetic demo
+from source with no remote, opt-in local MLflow tracking, immutable
+checksum-linked model versions, effective-configuration fingerprinting,
+five interpretable distribution-shift diagnostics, a 13-check integrated
+software self-check, Docker images for the existing backend and dashboard,
+an extended CI workflow, and a release procedure.
 
 Not implemented: online inference, autonomous dispatch of a policy-derived
 command, a learned or reinforcement-learning policy, stimulus-pacing or
-scene-content adaptation, break triggering, fatigue estimation, HRV, MLflow,
-DVC, Docker, deep learning. No deep or neural fusion exists in this
-repository, and no per-subject model is trained from scratch. The
-dashboard's live mode observes an existing **recording**; it performs no
-inference and produces no estimate of its own.
+scene-content adaptation, break triggering, fatigue estimation, HRV, deep
+learning. No deep or neural fusion exists in this repository, and no
+per-subject model is trained from scratch. The dashboard's live mode
+observes an existing **recording**; it performs no inference and produces
+no estimate of its own. Milestone 10 registers no model, promotes no model,
+exposes no tracking server, and adds no model-serving API.
 
 Pending validation: **Unity compilation and runtime** (no Unity Editor is
 installed here), **physical-webcam capture**, **UBFC-rPPG evaluation**,
@@ -67,6 +76,13 @@ used by anyone but its author.
 > must never be compared with a published result on real data. No fusion
 > strategy here is a champion, and a comparison on synthetic data cannot
 > select a best fusion architecture.
+
+> **Reproducibility is not validity. Tracking is not validation.
+> Registration is not approval. Packaging is not production readiness.
+> Drift alerts are engineering diagnostics.** A reproducible pipeline, a
+> tracked run, a versioned model, a green CI badge, and a built container
+> together establish that the software works. None of them establishes
+> that any estimate it produces describes a person.
 
 ## Quick Start
 
@@ -95,7 +111,14 @@ make check
 | `make test` | Run pytest |
 | `make test-cov` | Run pytest with coverage |
 | `make check` | Run all checks |
+| `make dvc-verify` | Prove `dvc.lock` is byte-stable across a fresh repro |
+| `make smoke` | Integrated software self-check (M10, ~12 s) |
+| `make mlops-demo` | The deterministic SYNTHETIC MLOps pipeline, one process |
+| `make dvc-dag` / `make dvc-repro` | The same pipeline as a DVC DAG (M10) |
+| `make docker-build` / `make docker-up` / `make docker-down` | Backend + dashboard containers (M10) |
+| `make release-check` | The automatable part of `docs/RELEASE.md` |
 | `make clean` | Remove caches |
+| `make clean-mlops` | Remove ONLY M10 generated output (never M5-M9 evidence) |
 
 ## Generate a Synthetic Demo Session
 
@@ -920,6 +943,164 @@ There is no "Apply adaptation" button and no "Run model" button.
 
 See [docs/DASHBOARD.md](docs/DASHBOARD.md).
 
+## MLOps, Packaging, and Reproducibility (Milestone 10)
+
+The operational layer around Milestones 5--9. It adds no model, no metric,
+and no finding.
+
+> Reproducibility is not validity. Tracking is not validation.
+> Registration is not approval. Packaging is not production readiness.
+> Drift alerts are engineering diagnostics.
+
+```bash
+# The whole deterministic SYNTHETIC pipeline, in one process
+uv run python -m engagevr mlops-demo
+
+# The same pipeline as a DVC DAG. No remote, no account, no network.
+uv run dvc dag
+uv run dvc repro
+
+# The integrated software self-check: 13 checks, ~12 s, no webcam,
+# no network, no Unity, no browser, no server
+uv run python -m engagevr system-smoke
+
+# Immutable, checksum-linked model versions from a finished run
+uv run python -m engagevr model-manifest \
+  --run artifacts/pipeline/experiments/baseline-engagement_class \
+  --output artifacts/pipeline/mlops/model_versions --verify
+
+# Distribution-shift diagnostic between two explicitly named datasets
+uv run python -m engagevr drift-check \
+  --reference artifacts/pipeline/datasets/reference.parquet \
+  --current   artifacts/pipeline/datasets/current.parquet \
+  --output    artifacts/pipeline/mlops/drift_report.json
+
+# Log finished runs to a LOCAL MLflow file store. Opt-in; nothing else
+# in this repository writes to a tracking store.
+uv run python -m engagevr mlflow-log --run <run directory>
+
+uv run python -m engagevr --version
+```
+
+### Clean-clone reproduction
+
+```bash
+git clone git@github.com:divya-m984/EngageVR.git
+cd EngageVR
+uv sync --locked
+uv run dvc repro
+make smoke
+```
+
+No hidden local state, no prior artifact directory, no pre-existing
+MLflow store, no DVC remote, no network, no account.
+
+### MLflow is opt-in and local
+
+`mlops.mlflow.enabled` is `false`. No Milestone 5--8 command imports the
+adapter, calls it, or starts a store, and importing the adapter does not
+import `mlflow`. When you ask for tracking, it writes to a local file
+store at `mlruns/` -- no server, no database, no API key.
+
+Every tracked run carries `engagevr.is_synthetic=true`,
+`engagevr.scientific_evaluation_eligible=false`, and the
+`SOFTWARE SELF-CHECK -- NOT SCIENTIFIC EVALUATION` banner. **Nothing is
+registered**, and no run, experiment, model, or tag may carry
+`production`, `staging`, `champion`, `approved`, or `validated`: the
+schema rejects those words.
+
+### A model version is a manifest, not an approval
+
+`ModelVersionManifest` records where an estimator came from (run id,
+dataset fingerprint, split fingerprint, feature-schema fingerprint,
+configuration fingerprint), which bytes it is (SHA-256 of the `.joblib`
+plus the run's own recorded digests), and what may be said about it. Its
+identifier is a deterministic hash of exactly that content -- no wall
+clock, no random component.
+
+There is **no field** for a stage, an alias, a promotion, or an approval.
+Nothing is unpickled: model files are executable content, so the layer
+hashes bytes. The producing run is left byte-identical.
+
+### Configuration is versioned, not merely named
+
+A filename is not a configuration version. What is recorded is the
+**normalized effective configuration** -- every default resolved -- with a
+SHA-256 over its canonical form. Three environment-specific paths are
+excluded, each with a stored reason, so two identical runs on two machines
+agree.
+
+### Drift is a diagnostic, not a diagnosis
+
+Five interpretable statistics -- missingness-rate difference, standardized
+mean difference, the KS statistic, PSI, and categorical total variation --
+between a **reference** and a **current** dataset, both named explicitly.
+
+A feature distribution shift is not model degradation. A prediction
+distribution shift is named `prediction_distribution_shift` and never
+concept drift: establishing concept drift needs labels from both periods,
+and no validated participant-provided label exists here. Missingness is
+measurement availability and is **never** disengagement.
+
+An unavailable statistic is reported unavailable with a reason, never as
+zero shift. Target columns take no part. Every threshold is an engineering
+diagnostic default, and there is no field an "the model failed" claim
+could occupy.
+
+### The pipeline is byte-reproducible, and `dvc.lock` is stable
+
+```
+clean source tree -> dvc repro -> dvc.lock byte-identical
+```
+
+given the same source, `uv.lock`, configuration, synthetic seed, and
+parameters. `dvc.lock` is tracked, and a fresh reproduction leaves it
+unchanged -- verified across two consecutive reproductions and across two
+independent source-only trees.
+
+That works through a boundary, not by deleting timestamps from artifacts
+that legitimately carry them. The Milestone 5--8 runners still record
+`started_at_utc`, `finished_at_utc`, and `created_at_utc`; those
+documents are simply never DVC-declared. A **deterministic stage record**
+is declared in their place, pinning the run id and checksumming only the
+byte-stable files -- so a real change to `metrics.json` still propagates
+to the lock, while the clock does not.
+
+Milestone 10's own documents carry no wall clock at all. When each was
+produced is written to a `<name>.execution.json` sidecar beside it, which
+is never a declared output. See DEC-100 and DEC-104.
+
+### Docker packages what already exists
+
+`Dockerfile.backend` runs the Milestone 4 `serve` bridge;
+`Dockerfile.dashboard` runs the Milestone 9 dashboard. **No model-serving
+API was added**, because there is no validated model to serve.
+
+Both images pin Python 3.12, install from `uv.lock`, run as a non-root
+user, and health-check their own liveness route. `docker-compose.yml`
+publishes **both ports to `127.0.0.1` only** -- neither service has
+authentication -- and mounts the dashboard's roots read-only.
+
+```bash
+docker compose config
+make docker-build
+make docker-up
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8501/_stcore/health
+make docker-down
+```
+
+### What Milestone 10 does not establish
+
+Nothing about a person. Every dataset it generates is synthetic and
+permanently labelled, every artifact carries
+`scientific_evaluation_eligible=false`, and a passing smoke check, a green
+CI run, a reproducible pipeline, a tracked run, a versioned model, and a
+built image together establish that the software works -- not that any
+estimate it produces is valid. See [docs/MLOPS.md](docs/MLOPS.md),
+[docs/RELEASE.md](docs/RELEASE.md), and
+[docs/LIMITATIONS.md](docs/LIMITATIONS.md).
+
 ## Privacy
 
 - Raw video is never stored by default.
@@ -980,7 +1161,16 @@ src/engagevr/         Python package
                       Streamlit components/pages/session_pages/app,
                       launch (M9)
   cli_milestone9.py   dashboard / dashboard-check / dashboard-sessions
+  mlops/              Operational layer, no modelling: fingerprints,
+                      model versions, MLflow adapter, drift diagnostics,
+                      pipeline stages, reproducibility, smoke (M10)
+  cli_milestone10.py  mlops-demo / model-manifest / drift-check /
+                      mlflow-log / repro-manifest / system-smoke
 configs/              YAML configuration files
+dvc.yaml, params.yaml The reproducible SYNTHETIC pipeline (M10)
+Dockerfile.backend    The M4 backend, containerised (M10)
+Dockerfile.dashboard  The M9 dashboard, containerised (M10)
+docker-compose.yml    Both services, published to 127.0.0.1 only (M10)
 protocol/             Checked-in JSON Schema and contract fixtures (M4)
 scripts/              Model download, protocol-artefact generation
 unity/EngageVR/       Unity desktop task, source only (NOT compiled)
@@ -1011,6 +1201,8 @@ docs/                 Project documentation
 - [Uncertainty and Abstention](docs/UNCERTAINTY_AND_ABSTENTION.md)
 - [Adaptive Environment](docs/ADAPTIVE_ENVIRONMENT.md)
 - [Research Dashboard](docs/DASHBOARD.md)
+- [MLOps and Packaging](docs/MLOPS.md)
+- [Release Procedure](docs/RELEASE.md)
 
 ## Disclaimer
 

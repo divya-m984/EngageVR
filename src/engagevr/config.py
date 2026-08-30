@@ -1774,6 +1774,210 @@ class DashboardConfig(BaseModel):
         return DashboardRunFamily(self.default_run_family)
 
 
+# --- Milestone 10: MLOps, packaging, and reproducibility ---
+
+
+class MlflowSettings(BaseModel):
+    """Local experiment-tracking settings.
+
+    ``enabled`` is ``false``.  Tracking is opt-in because a Milestone 5-8
+    command that silently started writing to a tracking store would be a
+    side effect nobody asked for, and because a run appearing in MLflow
+    must be a deliberate act rather than a consequence of running a
+    demo.
+
+    ``tracking_uri`` is a repository-relative directory, which MLflow
+    reads as a local file store.  No server, no account, and no network
+    access is required or permitted.
+
+    A database backend is deliberately not offered.  It would require the
+    full ``mlflow`` distribution, which pins ``pandas<3`` and would
+    downgrade this project's pandas across a major version to satisfy a
+    bookkeeping layer.  See ``docs/MLOPS.md``.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    enabled: bool = Field(
+        default=False,
+        description="Opt-in. No Milestone 5-8 command tracks anything unless set.",
+    )
+    tracking_uri: str = Field(
+        default="mlruns",
+        min_length=1,
+        description=(
+            "A repository-relative directory (a local MLflow file store), or "
+            "an explicit file: URI. Remote and database schemes are refused: "
+            "this milestone must work with no account and no server, and a "
+            "database backend would force a pandas major-version downgrade."
+        ),
+    )
+    experiment_name: str = Field(default="engagevr-software-self-check", min_length=1)
+    log_artifacts: bool = Field(
+        default=True,
+        description=(
+            "Copy the run's JSON documents and checksums into the tracking "
+            "store. Model binaries and raw media are never logged."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        from engagevr.schemas.mlops import assert_no_status_word
+
+        assert_no_status_word(
+            self.experiment_name, field="mlops.mlflow.experiment_name"
+        )
+        uri = self.tracking_uri.strip()
+        if "://" in uri or ":" in uri.split("/", 1)[0]:
+            scheme = uri.split(":", 1)[0].lower()
+            if scheme != "file":
+                extra = (
+                    " A database backend needs the full 'mlflow' "
+                    "distribution, which pins pandas<3 and would downgrade "
+                    "this project's pandas across a major version to satisfy "
+                    "a bookkeeping layer."
+                    if scheme in {"sqlite", "postgresql", "mysql", "mssql"}
+                    else ""
+                )
+                raise ValueError(
+                    f"mlops.mlflow.tracking_uri names the {scheme!r} scheme. "
+                    "Milestone 10 is local-first: a tracking store that needs "
+                    "an account, a server, or a database is refused. Use a "
+                    f"repository-relative directory or a file: URI.{extra}"
+                )
+            return self
+        path = PurePosixPath(uri)
+        if path.is_absolute():
+            raise ValueError(
+                "mlops.mlflow.tracking_uri must be a repository-relative "
+                "directory so this file stays portable"
+            )
+        if ".." in path.parts:
+            raise ValueError(
+                "mlops.mlflow.tracking_uri must not escape the repository with '..'"
+            )
+        if "artifacts" in (part.lower() for part in path.parts):
+            raise ValueError(
+                "mlops.mlflow.tracking_uri must not contain a path component "
+                "named 'artifacts'. MLflow's file store treats any run path "
+                "containing that component as a path-traversal attempt and "
+                "then reports the runs it just wrote as missing. The default "
+                "is 'mlruns', which is already gitignored."
+            )
+        return self
+
+
+class DriftThresholdSettings(BaseModel):
+    """ENGINEERING DIAGNOSTIC DEFAULTS for the distribution-shift layer.
+
+    Not one of these was calibrated against an outcome, a participant, or
+    an observed failure.  They were chosen because they are the values
+    conventionally used to make a statistic legible, and crossing one is
+    an invitation to look at a feature rather than a verdict about a
+    model or a person.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    minimum_samples: int = Field(
+        default=30,
+        ge=2,
+        description=(
+            "Present values required on BOTH sides before a statistic is "
+            "computed. Below it the feature is reported unavailable with a "
+            "reason, never as zero shift."
+        ),
+    )
+    histogram_bins: int = Field(
+        default=10,
+        ge=2,
+        le=100,
+        description="Quantile bins of the reference used by the PSI estimate.",
+    )
+    missingness_rate_difference: float = Field(default=0.10, ge=0.0, le=1.0)
+    standardized_mean_difference: float = Field(default=0.20, ge=0.0)
+    kolmogorov_smirnov: float = Field(default=0.10, ge=0.0, le=1.0)
+    population_stability_index: float = Field(default=0.20, ge=0.0)
+    categorical_total_variation: float = Field(default=0.10, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        for name in (
+            "missingness_rate_difference",
+            "standardized_mean_difference",
+            "kolmogorov_smirnov",
+            "population_stability_index",
+            "categorical_total_variation",
+        ):
+            value = float(getattr(self, name))
+            if not math.isfinite(value):
+                raise ValueError(f"mlops.drift.{name} must be finite")
+        return self
+
+    def as_mapping(self) -> dict[str, float]:
+        """Thresholds keyed by the drift method that consumes them."""
+        return {
+            "missingness_rate_difference": self.missingness_rate_difference,
+            "standardized_mean_difference": self.standardized_mean_difference,
+            "kolmogorov_smirnov_statistic": self.kolmogorov_smirnov,
+            "population_stability_index": self.population_stability_index,
+            "categorical_total_variation_distance": (self.categorical_total_variation),
+        }
+
+
+class MlopsConfig(BaseModel):
+    """Milestone 10 settings: pipeline roots, tracking, drift diagnostics.
+
+    Nothing here can change a scientific quantity.  There is no setting
+    that marks a run eligible, no setting that promotes a model, and no
+    setting that relaxes a provenance tag: those live in artifacts, and a
+    configuration file is not evidence.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    pipeline_root: str = Field(
+        default="artifacts/pipeline",
+        min_length=1,
+        description=(
+            "Where the reproducible DVC pipeline writes. Kept out of "
+            "dashboard.artifact_root so a pipeline rebuild does not "
+            "silently reshuffle the run catalogue a reader is looking at."
+        ),
+    )
+    smoke_root: str = Field(
+        default="artifacts/smoke",
+        min_length=1,
+        description="Where the system smoke check writes its scratch output.",
+    )
+    mlflow: MlflowSettings = Field(default_factory=MlflowSettings)
+    drift: DriftThresholdSettings = Field(default_factory=DriftThresholdSettings)
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        for name in ("pipeline_root", "smoke_root"):
+            value = getattr(self, name)
+            path = PurePosixPath(value)
+            if path.is_absolute():
+                raise ValueError(
+                    f"mlops.{name} must be a repository-relative path so this "
+                    f"file stays portable, got {value!r}"
+                )
+            if ".." in path.parts:
+                raise ValueError(
+                    f"mlops.{name} must not escape the repository with '..', "
+                    f"got {value!r}"
+                )
+        if self.pipeline_root == self.smoke_root:
+            raise ValueError(
+                "mlops.pipeline_root and mlops.smoke_root must differ: the "
+                "smoke check writes scratch output and must never overwrite "
+                "the pipeline's artifacts"
+            )
+        return self
+
+
 # --- Root model ---
 
 
@@ -1816,6 +2020,9 @@ class EngageVRConfig(BaseModel):
 
     # Milestone 9
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+
+    # Milestone 10
+    mlops: MlopsConfig = Field(default_factory=MlopsConfig)
 
     @model_validator(mode="after")
     def _check_adaptation_agrees_with_task(self) -> Self:

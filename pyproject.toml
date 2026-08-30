@@ -22,6 +22,8 @@ dependencies = [
     "pyarrow>=17,<26",
     "joblib>=1.4,<2",
     "streamlit>=1.62,<2",
+    "dvc>=3.67,<4",
+    "mlflow-skinny>=3.15,<4",
 ]
 
 [build-system]
@@ -102,6 +104,7 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
     "slow: marks tests as slow",
     "hardware: requires physical webcam (deselect with -m 'not hardware')",
+    "dvc_system: reproduces the DVC pipeline in two fresh source trees (~6 min); opt-in via ENGAGEVR_RUN_DVC_SYSTEM_TESTS=1",
 ]
 filterwarnings = ["ignore::DeprecationWarning:google.protobuf.*"]
 

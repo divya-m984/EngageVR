@@ -1,0 +1,13 @@
+# Patterns DVC never walks. Keeping these out of the pipeline's view
+# stops a stage from being invalidated by a virtual environment, a cache,
+# or a local editor file, none of which it reads.
+.venv/
+.git/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+mlruns/
+htmlcov/
+.coverage
+*.egg-info/

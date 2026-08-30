@@ -2899,3 +2899,487 @@ disclaimer.
 than by the absence of a counter-example, and the day a public corpus or a
 real live recording arrives, the surface that must label it has already been
 rendered.
+
+---
+
+### DEC-096: MLflow Is Opt-In, Local, and Skinny
+
+**Date:** 2026-08-29
+**Status:** Accepted
+
+**Context:** `docs/PROJECT_PLAN.md` requires MLflow for Milestone 10.
+Milestone 5 deferred it with a stated reason (`docs/EXPERIMENT_TRACKING.md`,
+"Why not MLflow yet"), and three constraints survived into this milestone:
+the layer must be local-first with no account and no server; running an
+ordinary Milestone 5-8 command must not start writing to a tracking store as
+a side effect; and the modelling code, written against pandas 3, must not be
+disturbed to accommodate a bookkeeping layer.
+
+Measured, not assumed: `uv add mlflow` resolves the full distribution, which
+pins `pandas<3` and downgrades this project's pandas from 3.0.3 to 2.3.3 — a
+major-version downgrade of the library the Milestone 5-9 code is written
+against. It also pulls Flask, gunicorn, SQLAlchemy, Alembic, Graphene, the
+Docker SDK, and matplotlib: a server stack for a milestone that must need no
+server.
+
+**Decision:** three things.
+
+*The dependency is `mlflow-skinny>=3.15,<4`.* It is the same project's
+tracking client without the server stack. `import mlflow` works,
+`mlflow.tracking.MlflowClient` works, a local file store works. What it
+cannot do — serve a UI, use a database backend — is not required. One
+consequence is recorded rather than hidden: `mlflow-skinny` caps
+`protobuf<7`, so protobuf moved 7.36.0 to 6.33.6. That was verified against
+the whole existing suite before the dependency was kept (3241 passed, 1
+skipped, unchanged); mediapipe declares no protobuf constraint and streamlit
+allows `>=5.26.1,<8`.
+
+*Tracking is opt-in.* `mlops.mlflow.enabled` is `false`. No Milestone 5-8
+runner imports the adapter, calls it, or starts a store, and importing
+`engagevr.mlops.mlflow_tracking` does not import `mlflow` — the client is
+imported inside the functions that need it, and a test asserts this in a
+subprocess. The Milestone 5 tests asserting no `mlruns`, `MLmodel`, or
+`meta.yaml` appears in a run directory still pass unchanged.
+
+*The store is `mlruns/`, not `artifacts/mlflow/`.* MLflow's file store
+rejects any run directory with a path component named `artifacts` — a
+path-traversal defence — and then reports the runs it just wrote as "not
+found". `mlruns/` is MLflow's own convention and was already gitignored.
+`assert_usable_store` raises a legible error rather than leaving a reader to
+decode MLflow's. MLflow 3.15 also puts the file store in maintenance mode,
+so the adapter sets `MLFLOW_ALLOW_FILE_STORE` and `MLFLOW_DISABLE_TELEMETRY`
+for the duration of one client call and restores the previous values,
+including their absence, on the way out.
+
+**Consequence:** tracking works from a clean clone with no account, no
+server, no database, and no network, and it happens only when somebody asks
+for it. The `<4` bound is the guard: if MLflow 4 removes the file store,
+this project does not follow it silently.
+
+---
+
+### DEC-097: A Model Version Is a Manifest, Not a Registry Entry
+
+**Date:** 2026-08-29
+**Status:** Accepted
+
+**Context:** `docs/PROJECT_PLAN.md` requires "model artifact and
+configuration are versioned". The obvious reading is MLflow's Model
+Registry, which is built around a *stage* — `Staging`, `Production`,
+`Archived` — or a named alias such as `champion`. Every one of those words
+records a decision somebody made about a model. Nobody has made one here: no
+model in this repository has been evaluated against a real participant
+label, and a registry entry would read as an approval that does not exist.
+
+**Decision:** version with an immutable, checksum-linked
+`ModelVersionManifest` and register nothing.
+
+The record answers three questions and refuses a fourth. *Where did this
+come from?* — source run id and family, dataset fingerprint, split
+fingerprint, feature-schema fingerprint, the embedded configuration version,
+fold index, calibration state, library versions. *Which bytes is it?* —
+SHA-256 and size of the `.joblib`, plus the run's own recorded digests for
+the documents it depends on. *What may be said about it?* — evaluation mode,
+synthetic status, scientific eligibility, disclaimers, and a limitation
+paragraph. *Should it be used?* — **there is no field**, and a test asserts
+that `stage`, `alias`, `status`, `promoted`, and `approved_by` are all
+absent from the schema.
+
+`model_version_id` is `mv-<target>-<model>-<sha256(...)[:12]>` over exactly
+the content above. No wall clock and no random component participates, so
+re-deriving a version from the same run reproduces the identifier.
+
+Three safety properties are enforced rather than documented. Nothing is
+unpickled: a `.joblib` is executable content, so the layer hashes bytes and
+a test monkeypatches `joblib.load` to raise. The producing run is not
+modified: a test hashes the whole directory before and after. Tampering is
+refused at build time rather than certified.
+
+`FORBIDDEN_STATUS_WORDS` — production, staging, champion, challenger,
+approved, validated, certified, clinical, diagnostic — is rejected at the
+schema boundary in identifiers, model names, experiment names, run names,
+and every tag value that is not itself a disclaimer.
+
+**Consequence:** a release can state exactly which bytes were fitted, from
+which data, under which configuration, and verify it — without any record
+implying that a person decided the model was fit for anything.
+
+---
+
+### DEC-098: Configuration Identity Is the Normalized Effective Configuration
+
+**Date:** 2026-08-29
+**Status:** Accepted
+
+**Context:** `docs/PROJECT_PLAN.md` requires configuration versioning.
+Recording the filename `configs/defaults.yaml` versions nothing: the file
+can change between two runs that both name it, and the YAML omits every
+default, so it is not even a complete description of what ran.
+
+**Decision:** record the **normalized effective configuration** — the
+resolved Pydantic model rendered in JSON mode, so every default is present —
+together with a SHA-256 over its canonical form and a snapshot of the
+sections that shape a run.
+
+Three paths are removed before hashing, each with a reason stored in the
+record itself, and `ConfigurationVersion` refuses to validate if an excluded
+path has no stated reason:
+
+- `rppg.datasets.ubfc_rppg_root` — an absolute path to a locally obtained
+  public dataset, different on every machine, never fetched by this
+  software, and taking no part in any synthetic pipeline;
+- `logging.file` — a local log destination, which changes where diagnostics
+  are written and nothing about what was computed;
+- `capture.camera_index` — a device index identifying one webcam on one
+  machine, read by no modelling, tracking, or packaging stage.
+
+Nothing that can change a number is excluded. The exclusions exist so that
+two identical runs on two machines agree, which is the fingerprint's only
+job.
+
+Two companions use the same convention. The **split fingerprint** covers the
+strategy, group field, split count, seed, and each fold's *sorted* group
+membership, and deliberately excludes row counts and target distributions:
+those are consequences of the group assignment, and including them would
+make a dataset that merely grew look like a different split. The
+**feature-schema fingerprint** covers the catalog version and the *ordered*
+predictor columns — order participates, because a linear model's
+coefficients are read positionally.
+
+**Consequence:** "which configuration produced this?" has an auditable
+answer that survives being copied to another machine, and a settings change
+that could alter a result changes the fingerprint.
+
+---
+
+### DEC-099: Drift Is a Distribution-Shift Diagnostic, Never a Diagnosis
+
+**Date:** 2026-08-29
+**Status:** Accepted
+
+**Context:** `docs/PROJECT_PLAN.md` requires drift checks. In a project that
+estimates engagement and cognitive load, "drift" is a word one slip away
+from a claim about a person — participant drift, disengagement drift,
+cognitive decline — and one slip away from a claim about a model, since a
+threshold crossing reads naturally as a failure.
+
+**Decision:** implement a small, deterministic, interpretable
+distribution-shift layer, and build the refusals into the schema.
+
+*Five methods, not fifteen*, each answering a different question a reader
+can check by hand: missingness-rate difference, standardized mean
+difference (pooled), the two-sample Kolmogorov-Smirnov statistic,
+Population Stability Index over quantile bins of the reference, and
+categorical total variation distance. No p-value accompanies the KS
+statistic: it would be a hypothesis test nobody specified in advance and
+would grow significant with sample size alone.
+
+*Both sides are named.* Reference and current are explicit arguments;
+nothing guesses which two directories to compare. Each side records its
+path, fingerprint, row count, data-source counts, and eligibility.
+
+*Unavailability is never zero.* A column missing on one side, all-null, too
+thin, constant, or of a mismatched type is reported unavailable with a
+reason, and the schema refuses to let an unavailable statistic carry a
+`statistic` or an `exceeded` verdict. Zero means "these distributions
+agree", and collapsing the two would let an absent measurement read as a
+healthy one.
+
+*Targets never take part.* `target__*` and `target_meta__*` are excluded by
+construction with "leakage" as the stored reason, so no shift statistic can
+be computed from a label.
+
+*There is no failure field.* Counts and per-feature, per-method statistics
+with their thresholds beside them — no overall pass/fail, and a test asserts
+`model_failed`, `alarm`, `passed`, `verdict`, and `status` are absent from
+the schema. `--fail-on-shift` exists as an opt-in build gate and says so
+when it fires.
+
+*The vocabulary is bounded by the enum.* `DriftReportKind` has exactly
+`feature_distribution_shift` and `prediction_distribution_shift`. There is
+deliberately no `concept_drift`: establishing concept drift needs labels
+from both periods, and no validated participant-provided label exists here.
+
+Every threshold is an **engineering diagnostic default**, chosen for
+legibility, and the report says so in a required field.
+
+**Consequence:** the milestone delivers the drift check the plan asks for,
+and the record it produces cannot be quoted as evidence that a model
+degraded or that anyone's state changed.
+
+---
+
+### DEC-100: DVC Outputs Are Not Cached, and `dvc.lock` Is Tracked and Stable
+
+**Date:** 2026-08-29
+**Status:** Accepted
+
+**Context:** `docs/PROJECT_PLAN.md` accepts Milestone 10 only when a "clean
+clone can reproduce the demo". DVC's usual answer is a cache plus a remote:
+commit `dvc.lock`, run `dvc pull`, restore the outputs. This repository has
+no remote, wants none, and gitignores every artifact the pipeline produces.
+
+`dvc.lock` also records hashes of those outputs, and they embed wall-clock
+fields — run manifests carry `started_at_utc`, dataset metadata carries
+`created_at_utc` — so the lock cannot match across two correct executions or
+two machines.
+
+**Decision:** declare every stage output `cache: false`, track `dvc.lock`,
+and make it **byte-stable** so that tracking it costs nothing.
+
+*Outputs are not cached.* The demo is **regenerated from source**, never
+restored. There is nothing to `dvc pull`, no remote to configure, no binary
+in Git, and a clean clone reproduces by running the pipeline. `dvc.yaml` and
+`params.yaml` are the committed, reviewable definition of what the pipeline
+is; `.dvc/config` (telemetry off, auto-staging off, version check off),
+`.dvc/.gitignore`, and `.dvcignore` are committed with them.
+`autostage = false` matters here: DVC must never run `git add` on this
+repository's behalf.
+
+*`dvc.lock` is tracked and stable.* Gitignoring it was tried first and
+rejected by DVC itself, which refuses to operate with an ignored lock
+(`ERROR: 'dvc.lock' is git-ignored`). An earlier revision of this decision
+then accepted a lock that churned on every fresh reproduction, on the
+grounds that several declared outputs recorded their own creation time.
+**That was wrong and has been corrected.** A tracked file that changes on
+every run stops carrying information: "the lock changed" becomes noise, and
+a reviewer loses the one signal that would have told them a pipeline output
+genuinely moved.
+
+The invariant now maintained:
+
+```
+clean source tree -> dvc repro -> dvc.lock byte-identical
+```
+
+given the same source, `uv.lock`, configuration, synthetic seed, and
+parameters. The mechanism is the orchestration boundary in DEC-104, not the
+removal of timestamps from anywhere they belong. Verified twice: two
+consecutive fresh reproductions in the working tree produce the same lock,
+and two independent source-only trees — each synced from `uv.lock` and
+reproduced from scratch — produce that same lock as each other. A second
+`dvc repro` in each skips all eight stages.
+
+No digest is recorded in this decision. The lock depends on the source by
+design: change a declared dependency and it changes. The invariant is that
+two reproductions *from the same source* agree, which `make dvc-verify`
+checks in one command.
+
+Measured consequence: a second `dvc repro` still does no work — all eight
+stages report "didn't change, skipping" and `dvc status` reports "up to
+date" — because DVC compares dependencies, parameters, and commands, none of
+which carries a timestamp. CI asserts it.
+
+**Consequence:** reproduction needs a clone, a lock file for *dependencies*
+(`uv.lock`), and one command. It never needs storage credentials, and it
+never leaves a dirty working tree. A modified `dvc.lock` after a
+reproduction now means something changed — which is what a tracked lock is
+for.
+
+---
+
+### DEC-101: Reproducibility Is Logical, Not Byte-for-Byte
+
+**Date:** 2026-08-29
+**Status:** Accepted
+
+**Context:** Two correct executions of the demo do not produce identical
+bytes. Run manifests record `started_at_utc` and `finished_at_utc`; dataset
+metadata records `created_at_utc`; model-version records and drift reports
+each record when they were built. A reproducibility check that compared
+whole directories would fail every time and teach a reader to ignore it.
+
+**Decision:** `ReproducibilityManifest` separates two things and hashes only
+one of them.
+
+*Logical identity* — dataset fingerprints, run identifiers, model-version
+identifiers, the drift report fingerprint, the catalogue digest, and the
+SHA-256 of every output **declared byte-deterministic** — is covered by
+`logical_fingerprint`. That is what must match.
+
+*Volatile record* — the checksum of every other output — is stored as
+information beside a required `non_determinism_reason`. Useful for spotting
+a file that changed when it should not have; never folded into identity.
+
+`excluded_from_identity` is a required field naming what never participates:
+`created_at_utc`, absolute filesystem paths, wall-clock fields inside run
+manifests and dataset metadata, MLflow run and experiment identifiers, and
+the host platform. Output paths are recorded relative to the pipeline root
+for the same reason: an absolute path is a fact about one machine.
+
+`BYTE_DETERMINISTIC_NAMES` is short and checked. A file added to it that
+turns out to vary makes the two-execution comparison fail loudly rather than
+quietly weakening the guarantee.
+
+Verified: two executions from clean output directories produce identical
+dataset fingerprints, run identifiers, model-version identifiers, report
+fingerprints, and deterministic checksums; `repro-manifest --compare` exits
+zero. CI runs the same comparison.
+
+**Consequence:** the project claims a property it can actually demonstrate,
+and the timestamps that would defeat a naive check are excluded by
+construction rather than tolerated by convention.
+
+---
+
+### DEC-102: The Pipeline Root Is Outside the Dashboard Artifact Root
+
+**Date:** 2026-08-29
+**Status:** Accepted
+
+**Context:** The Milestone 10 pipeline produces run directories that look
+exactly like Milestone 5-8 runs, because they are: the stages call
+`baseline-demo` and `uncertainty-demo`. Writing them into
+`dashboard.artifact_root` (`artifacts/experiments`) would mean every
+`dvc repro` silently reshuffled the catalogue a reader is looking at, and
+that a `make clean`-style operation on pipeline output could take
+Milestone 5-9 evidence with it.
+
+**Decision:** the pipeline writes under `mlops.pipeline_root`
+(`artifacts/pipeline`) and the smoke check under `mlops.smoke_root`
+(`artifacts/smoke`), both inside the gitignored `artifacts/` tree and both
+outside `dashboard.artifact_root`. Configuration validation refuses to let
+the two roots be equal.
+
+The Milestone 9 dashboard still reads them, because the artifact root is an
+argument: `dashboard --artifact-root artifacts/pipeline/experiments`, and
+the `integrity` stage does exactly that through `dashboard-check`. Nothing
+about Milestone 9 changed.
+
+`make clean-mlops` removes `artifacts/pipeline`, `artifacts/smoke`, and
+`mlruns`, and deliberately nothing else — it never touches
+`artifacts/experiments`, `artifacts/sessions`, `artifacts/datasets`, or the
+tracked `dvc.lock`.
+There is no `git clean` anywhere in this repository.
+
+**Consequence:** the demo can be regenerated as often as anyone likes
+without disturbing the evidence somebody is reading, and cleaning up after
+it is a scoped operation rather than a hopeful one.
+
+---
+
+### DEC-103: Docker Packages the Existing Backend and Dashboard, and Adds No API
+
+**Date:** 2026-08-29
+**Status:** Accepted
+
+**Context:** `docs/PROJECT_PLAN.md` accepts Milestone 10 only when
+"Dockerized backend and dashboard work". A packaging milestone invites a
+model-serving container — a `/predict` endpoint, a scoring API — because
+that is what MLOps tutorials contain. This project has no validated model to
+serve, and an inference endpoint would be an interface promising a
+capability that does not exist.
+
+**Decision:** two images, each running code that already existed.
+`Dockerfile.backend` runs `python -m engagevr serve`, the Milestone 4
+FastAPI and WebSocket bridge. `Dockerfile.dashboard` runs
+`python -m engagevr dashboard`, the Milestone 9 Streamlit application. No
+third image, no new endpoint, no second dashboard. A test asserts the words
+`predict`, `inference`, `model-server`, and `/invocations` appear in no
+instruction of either Dockerfile.
+
+Both images pin `python:3.12-slim-bookworm`, install with
+`uv sync --locked --no-dev` and never `pip install`, run as a non-root user,
+expose exactly one port, and health-check against the application's own
+liveness route using `urllib` so the image needs no extra package to check
+itself. Neither uses BuildKit cache mounts: they would make the images
+buildable only by a daemon with `buildx`, and a packaging milestone whose
+images cannot be built by a plain `docker build` has packaged nothing.
+
+`docker-compose.yml` publishes **both ports to `127.0.0.1` only**. Neither
+service has authentication, authorisation, or transport encryption;
+publishing either to a routable interface would expose an unauthenticated
+bridge and a filesystem browser for the artifact root. The dashboard mounts
+both roots read-only, which makes its read-only property a filesystem fact
+as well as a code property.
+
+`.dockerignore` excludes every generated, local, and private path, and the
+exclusion is verified after building rather than assumed: both images
+contain only source, configuration, the locked environment, and empty mount
+points.
+
+**Consequence:** the acceptance criterion is met by packaging what the
+project has, and the images cannot be mistaken for a deployment of a model
+that has never been evaluated against a person.
+
+---
+
+### DEC-104: Deterministic DVC Outputs Are Separated From Volatile Execution Metadata
+
+**Date:** 2026-08-29
+**Status:** Accepted
+
+**Context:** DEC-100 requires `dvc.lock` to be byte-stable across fresh
+reproductions. Measured, twenty of the pipeline's fifty-six files were not:
+run manifests record `started_at_utc` and `finished_at_utc`, dataset
+metadata records `created_at_utc`, `checksums.json` digests those documents
+and inherits their instability, and the Milestone 10 records each stamped
+their own build time.
+
+Two repairs were available and one of them is wrong. Stripping timestamps
+from the Milestone 5-8 artifacts would satisfy the build tool by damaging
+scientific provenance: a run *did* happen at a time, and that is a fact a
+research repository keeps.
+
+**Decision:** put a boundary between the two, at the Milestone 10
+orchestration layer.
+
+```
+existing runner output          timestamped, intact, NOT DVC-declared
+          |
+deterministic stage record      engagevr stage-record
+          |
+DVC-declared output             byte-stable, hashed into dvc.lock
+```
+
+*The runner artifacts are untouched.* `manifest.json` still records both
+timestamps. What changed is that the run directory is no longer a DVC
+output.
+
+*A stage record is declared in its place.* `DeterministicStageRecord` pins
+the stage's logical identity — the run id, itself a hash of the run's
+inputs — and checksums every byte-stable file the run produced, models
+included. The timestamped documents are listed by path **with the reason
+they vary and without a checksum**, so their contents cannot reach the lock
+while a reader can still see what was excluded and why.
+
+*A meaningful change still propagates.* Alter `metrics.json` and the
+record's checksum for it changes, so the record's bytes change, so
+`dvc.lock` changes and every downstream stage re-runs. What no longer
+propagates is the clock. A test asserts both halves.
+
+*Milestone 10's own documents carry no wall clock at all.* Model versions,
+the drift report, the reproducibility manifest, and the stage records have
+no `created_at_utc` field. When each was produced is written to a
+`<name>.execution.json` sidecar beside it, which is never declared —
+`ExecutionMetadata` says so in a required field. Nothing was discarded;
+provenance was moved to where it cannot make a reproducible pipeline look
+irreproducible.
+
+Three smaller rules follow from the same principle:
+
+- **Python is recorded as a series** (`3.12`), not a patch level. The
+  compatibility contract is the series; recording `3.12.13` would put every
+  interpreter upgrade into the identity of every document. The full version
+  is in the sidecar.
+- **Recorded commands are pipeline-relative.** `stage-record` normalises the
+  pipeline root out of the command it stores, so the same demo under
+  `/tmp/scratch` and under `artifacts/pipeline` produces the same record.
+  Without this a temporary directory would leak into a tracked identity.
+- **`dataset.json` is not among a model version's referenced checksums.** It
+  copies the dataset metadata verbatim, creation time included. The dataset
+  is pinned by `dataset_fingerprint` instead, which excludes the wall clock
+  by construction.
+
+*Classification is explicit and fails safe.* `VOLATILE_ARTIFACT_REASONS`
+names the timestamped documents. A file this repository has not classified
+is treated as **deterministic** and checksummed, so if it turns out to vary
+the two-execution test fails loudly rather than the guarantee weakening in
+silence.
+
+**Consequence:** the pipeline satisfies a reproducibility property it can
+demonstrate byte for byte, and it does so without any Milestone 5-8 artifact
+losing a field. Forty-seven regression tests
+(`tests/unit/test_dvc_determinism.py`) hold the boundary in place, and an
+opt-in two-source-tree proof
+(`tests/system/test_dvc_lock_stability.py`) checks it end to end.

@@ -23,6 +23,14 @@ Usage::
     uv run python -m engagevr dashboard --artifact-root artifacts/experiments
     uv run python -m engagevr dashboard-check --artifact-root artifacts/experiments
     uv run python -m engagevr dashboard-sessions --session demo-session
+    uv run python -m engagevr mlops-demo --pipeline-root artifacts/pipeline
+    uv run python -m engagevr model-manifest --run RUN_DIR --output OUT_DIR
+    uv run python -m engagevr drift-check --reference A.parquet --current B.parquet
+    uv run python -m engagevr mlflow-log --run RUN_DIR
+    uv run python -m engagevr repro-manifest --output OUT.json
+    uv run python -m engagevr stage-record --stage baseline
+    uv run python -m engagevr system-smoke
+    uv run python -m engagevr --version
 
 All outputs from the ``demo``, ``rppg-demo``, ``task-sim``, ``features-demo``,
 ``baseline-demo``, ``fusion-demo``, ``personalization-demo``,
@@ -45,6 +53,7 @@ import sys
 import time
 from pathlib import Path
 
+from engagevr import __version__
 from engagevr.datasets import ADAPTERS
 from engagevr.schemas.rppg import RppgMethod
 from engagevr.simulator.synthetic import generate_synthetic_session
@@ -54,6 +63,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="engagevr",
         description="EngageVR research prototype CLI.",
+    )
+    # One source of truth: ``engagevr.__version__``, which is also what
+    # pyproject.toml declares. The identity is not derived from git state,
+    # because a working tree is not a release and a tag is not a build.
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"engagevr {__version__}",
+        help="Print the package version and exit.",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -157,6 +175,7 @@ def _build_parser() -> argparse.ArgumentParser:
     from engagevr.cli_milestone7 import add_parsers as add_milestone7_parsers
     from engagevr.cli_milestone8 import add_parsers as add_milestone8_parsers
     from engagevr.cli_milestone9 import add_parsers as add_milestone9_parsers
+    from engagevr.cli_milestone10 import add_parsers as add_milestone10_parsers
 
     add_parsers(sub)
     add_milestone5_parsers(sub)
@@ -164,6 +183,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add_milestone7_parsers(sub)
     add_milestone8_parsers(sub)
     add_milestone9_parsers(sub)
+    add_milestone10_parsers(sub)
     return parser
 
 
@@ -745,6 +765,28 @@ def main(argv: list[str] | None = None) -> int:
             "dashboard-sessions": cli_milestone9.run_dashboard_sessions,
         }
         return milestone9[args.command](args)
+
+    if args.command in (
+        "mlops-demo",
+        "model-manifest",
+        "drift-check",
+        "mlflow-log",
+        "repro-manifest",
+        "stage-record",
+        "system-smoke",
+    ):
+        from engagevr import cli_milestone10
+
+        milestone10 = {
+            "mlops-demo": cli_milestone10.run_mlops_demo,
+            "model-manifest": cli_milestone10.run_model_manifest,
+            "drift-check": cli_milestone10.run_drift_check,
+            "mlflow-log": cli_milestone10.run_mlflow_log,
+            "repro-manifest": cli_milestone10.run_repro_manifest,
+            "stage-record": cli_milestone10.run_stage_record,
+            "system-smoke": cli_milestone10.run_system_smoke_command,
+        }
+        return milestone10[args.command](args)
 
     if args.command in ("serve", "task-sim", "session-inspect", "session-replay"):
         from engagevr import cli_milestone4
