@@ -118,10 +118,21 @@ class TestBuilding:
     def test_the_checksum_matches_the_file_on_disk(
         self, m10_baseline_run: Path
     ) -> None:
-        for version in build_model_versions(m10_baseline_run, config=load_config()):
+        # The digest moved out of the portable record (DEC-105); it did not
+        # stop being recorded, and it still describes the actual bytes.
+        from engagevr.mlops.model_version import build_model_artifact_integrity
+
+        versions = build_model_versions(m10_baseline_run, config=load_config())
+        entries = {
+            entry.path: entry
+            for entry in build_model_artifact_integrity(versions, m10_baseline_run)
+        }
+        assert entries
+        for version in versions:
             path = m10_baseline_run / version.model_artifact_path
-            assert version.model_artifact_sha256 == sha256_file(path)
-            assert version.model_artifact_bytes == path.stat().st_size
+            entry = entries[version.model_artifact_path]
+            assert entry.sha256 == sha256_file(path)
+            assert entry.size_bytes == path.stat().st_size
 
     def test_referenced_documents_are_checksum_linked(
         self, m10_baseline_run: Path

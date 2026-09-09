@@ -59,6 +59,32 @@
 # changes and every downstream stage re-runs. What no longer propagates
 # is the clock.
 #
+# NOR THE SERIALIZED MODEL BYTES
+# ------------------------------
+# A first version of that boundary checksummed every non-timestamped file
+# "models included", and GitHub Actions found the flaw that same-machine
+# testing could not: the model_versions directory hashed differently on a
+# clean runner, same size, same file count. joblib writes scikit-learn's
+# raw tree-node buffer, whose C struct has seven never-initialised padding
+# bytes per node -- 112,826 per random-forest artifact here, thousands of
+# them non-zero heap residue -- so a .joblib digest hashes memory that no
+# pipeline input determines.
+#
+# A stage record therefore has three classes, not two:
+#
+#     portable_deterministic   checksummed, and only these reach the lock
+#     execution_specific       named with a reason, digest recorded in
+#                              <name>.artifact-integrity.execution.json
+#     volatile_provenance      named with a reason, never checksummed
+#
+# Nothing is lost. The model files are still written exactly as before,
+# still hashed, and still tamper-checked; a model version still names its
+# artifact; the integrity sidecar holds the real SHA-256 and the
+# environment that produced it. What no longer propagates is one
+# machine's heap. An unclassified new output is still treated as portable
+# deterministic, so it fails loudly rather than being excluded in silence.
+# See docs/MLOPS.md, DEC-104, and DEC-105.
+#
 # Milestone 10's own documents carry no wall clock at all. When each was
 # produced is recorded in a .execution.json sidecar beside it, which is
 # never a declared output. See docs/MLOPS.md and DEC-100.
@@ -187,7 +213,10 @@ stages:
     # The run directory is produced but NOT declared: manifest.json,
     # dataset.json, and checksums.json record when the run happened. The
     # stage record pins its run_id and checksums every byte-stable file
-    # it wrote, models included.
+    # it wrote. The .joblib estimators are named there with the reason
+    # they are excluded; their real checksums go to
+    # stages/baseline.artifact-integrity.execution.json, which is not a
+    # declared output. See DEC-105.
     outs:
       - artifacts/pipeline/mlops/stages/baseline.json:
           cache: false
@@ -226,9 +255,11 @@ stages:
   # ---------------------------------------------------- versioning + checks
   model-version:
     desc: >-
-      Derive one immutable, checksum-linked version record per persisted
-      estimator. Reads the run; never loads a model file; never writes
-      into the run directory.
+      Derive one immutable version record per persisted estimator, keyed
+      by scientific and software provenance rather than by serialized
+      bytes. Reads the run; never loads a model file; never writes into
+      the run directory. The artifacts' real checksums go beside the
+      output directory, not into it.
     cmd: >-
       uv run python -m engagevr model-manifest
       --run artifacts/pipeline/experiments/baseline-${pipeline.target}
@@ -239,8 +270,11 @@ stages:
       - src/engagevr/mlops/model_version.py
       - src/engagevr/schemas/mlops.py
       - configs/defaults.yaml
-    # Every version record is byte-stable: it carries no creation time.
-    # model_versions.execution.json sits beside the directory, not in it.
+    # Every version record is byte-stable and portable: it carries no
+    # creation time and no serialized-artifact checksum. Both sidecars --
+    # model_versions.execution.json and
+    # model_versions.artifact-integrity.execution.json -- sit beside the
+    # directory, not in it, so neither reaches the lock.
     outs:
       - artifacts/pipeline/mlops/model_versions:
           cache: false
@@ -288,7 +322,8 @@ stages:
       Record the package versions, the effective configuration
       fingerprint, every stage's logical identity, and the checksums of
       the outputs declared byte-deterministic. Wall clocks, absolute
-      paths, and MLflow identifiers are excluded from identity.
+      paths, MLflow identifiers, and serialized-estimator checksums are
+      excluded from identity.
     cmd: >-
       uv run python -m engagevr repro-manifest
       --pipeline-root artifacts/pipeline

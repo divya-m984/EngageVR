@@ -75,13 +75,12 @@ def model_version(**overrides: object) -> ModelVersionManifest:
         "dataset_fingerprint": DIGEST,
         "split_fingerprint": OTHER,
         "feature_schema_fingerprint": "c" * 64,
+        "estimator_parameters_fingerprint": "e" * 64,
         "feature_catalog_version": "1.0",
         "feature_count": 108,
         "configuration": configuration_version(),
         "serialization_library_version": "1.5.3",
         "model_artifact_path": "models/logistic_regression-fold0.joblib",
-        "model_artifact_sha256": "d" * 64,
-        "model_artifact_bytes": 4096,
         "engagevr_version": "0.1.0",
         "python_series": "3.12",
         "evaluation_mode": EvaluationMode.SOFTWARE_SELF_CHECK,
@@ -263,7 +262,7 @@ class TestModelVersionManifest:
 
     def test_an_uppercase_digest_is_refused(self) -> None:
         with pytest.raises(ValidationError, match="lowercase SHA-256"):
-            model_version(model_artifact_sha256="D" * 64)
+            model_version(estimator_parameters_fingerprint="D" * 64)
 
     def test_the_manifest_carries_no_wall_clock_field(self) -> None:
         fields = set(ModelVersionManifest.model_fields)

@@ -94,6 +94,15 @@ The DVC two-tree proof **is** worth running before a release; step 4
 covers the same invariant more cheaply. Do not report either skipped
 suite as a pass.
 
+`pre-commit` must leave `dvc.lock` untouched. DVC wraps long commands with
+a trailing space on every continued line, and a whitespace hook that
+strips them makes the committed lock differ from the one `dvc repro`
+produces — which fails step 4 and fails CI on an edit nobody made
+deliberately. The `trailing-whitespace` and `end-of-file-fixer` hooks
+therefore exclude the file, and a unit test asserts they still do. If
+`pre-commit` ever reports `Fixing dvc.lock`, stop and restore it with
+`dvc repro` before committing.
+
 ## 4. DVC reproducibility
 
 ```bash
@@ -116,13 +125,45 @@ git status --porcelain dvc.lock  # must be empty
 
 A modified `dvc.lock` here is a **failure**, not expected churn. It means
 a declared output stopped being byte-stable; find it before releasing.
-See DEC-100 and DEC-104.
+See DEC-100, DEC-104, and DEC-105.
 
 Optionally run the two-source-tree proof (about six minutes):
 
 ```bash
 ENGAGEVR_RUN_DVC_SYSTEM_TESTS=1 uv run pytest -m dvc_system
 ```
+
+### This step is same-machine, and that is not enough
+
+Everything above runs on one machine, and a defect that only appears
+across environments will pass all of it. That has happened: on PR #9,
+GitHub Actions failed the identical check against the committed lock while
+every local run agreed (DEC-105).
+
+So treat the release-time answer as provisional and let CI settle it. If a
+clean Linux container is available, one extra cross-environment check is
+worth the minutes:
+
+```bash
+# A source-only copy, reproduced under a different libc and interpreter
+# patch. Writes nothing back into the working tree.
+docker run --rm -v "$PWD:/src:ro" ubuntu:24.04 bash -c '
+  apt-get update -qq && apt-get install -y -qq curl ca-certificates git &&
+  curl -LsSf https://astral.sh/uv/install.sh | sh &&
+  export PATH=/root/.local/bin:$PATH &&
+  cp -r /src /work && cd /work && rm -rf .venv artifacts mlruns .git &&
+  git init -q && git add -A &&
+  git -c user.email=c@i -c user.name=ci commit -qm base &&
+  uv python install 3.12 && uv sync --locked && uv run dvc repro >/dev/null &&
+  git diff --exit-code -- dvc.lock && echo "LOCK MATCHES"'
+```
+
+Mount the repository **read-only**, as above: a container must never write
+generated artifacts back into the working tree.
+
+A container shares the host CPU, so this cannot detect a difference in BLAS
+kernel dispatch. It is a stronger check than the local one and a weaker
+check than CI.
 
 Then verify **logical** reproducibility across two independent
 executions:
@@ -185,10 +226,33 @@ mismatch. Confirm in the output:
 - every line ends `eligible=false`;
 - the closing sentence "No version here is production, staging, champion,
   approved, or validated" is printed;
+- `Artifact integrity:` reports one checksum per persisted estimator,
+  written to `model_versions.artifact-integrity.execution.json`;
 - the model-version identifiers are unchanged from the previous release
-  **only if** the dataset, split, feature schema, configuration, and code
-  version are all unchanged. A changed identifier is not a fault; it is the
-  mechanism working.
+  **only if** the dataset, split, feature schema, estimator
+  hyperparameters, configuration, and code version are all unchanged. A
+  changed identifier is not a fault; it is the mechanism working.
+
+A model-version identifier is **logical**: it does not move when only the
+serialized bytes do, because pickled estimator bytes are not portable
+between environments (DEC-105). Each concrete `.joblib`'s actual SHA-256 is
+in the integrity record beside the directory, never in the version record:
+
+```bash
+python -c "
+import json, pathlib
+p = pathlib.Path('artifacts/pipeline/mlops/'
+                 'model_versions.artifact-integrity.execution.json')
+d = json.loads(p.read_text())
+print(d['platform'], d['python_version'])
+for a in d['artifacts']:
+    print(a['sha256'][:16], a['size_bytes'], a['path'])
+"
+```
+
+Confirm one entry per persisted estimator. Zero entries is a **failure**:
+artifact integrity must not be lost when it leaves the portable record.
+Two entries differing between machines is **expected**, not a fault.
 
 ## 7. Docker builds
 
@@ -345,8 +409,9 @@ they should not be published.
 | 2 | Dependencies | `uv lock --check && uv sync --locked` | lock in sync |
 | 3 | Full checks | `ruff`, `mypy`, `pytest`, `pre-commit` | all pass |
 | 4 | DVC reproducibility | `dvc repro` ×2, `sha256sum dvc.lock` ×2, `repro-manifest --compare` | lock byte-identical; second repro no-op; identities match |
+| 4b | Cross-environment lock | container repro (step 4) | same lock, or a named reason — CI is the arbiter |
 | 5 | MLflow | `mlflow-log` | local URI, synthetic, ineligible, nothing registered |
-| 6 | Model versions | `model-manifest --verify` | no checksum mismatch |
+| 6 | Model versions | `model-manifest --verify` | no checksum mismatch; one integrity entry per estimator |
 | 7 | Docker builds | `docker build` ×2, image contents | no generated or private state |
 | 8 | Backend health | `docker compose up -d`, `curl /health` | healthy, 200 |
 | 9 | Dashboard health | `curl /_stcore/health` | healthy, 200 |

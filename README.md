@@ -44,7 +44,8 @@ without writing to them, and exports a deterministic session report; and --
 new in Milestone 10 -- an operational layer that adds **no modelling**:
 an eight-stage DVC pipeline that reproduces a deterministic synthetic demo
 from source with no remote, opt-in local MLflow tracking, immutable
-checksum-linked model versions, effective-configuration fingerprinting,
+logical model versions with execution-specific artifact integrity records,
+effective-configuration fingerprinting,
 five interpretable distribution-shift diagnostics, a 13-check integrated
 software self-check, Docker images for the existing backend and dashboard,
 an extended CI workflow, and a release procedure.
@@ -964,7 +965,8 @@ uv run dvc repro
 # no network, no Unity, no browser, no server
 uv run python -m engagevr system-smoke
 
-# Immutable, checksum-linked model versions from a finished run
+# Immutable logical model versions from a finished run, plus an
+# execution-specific record of each serialized artifact's SHA-256
 uv run python -m engagevr model-manifest \
   --run artifacts/pipeline/experiments/baseline-engagement_class \
   --output artifacts/pipeline/mlops/model_versions --verify
@@ -1055,8 +1057,9 @@ clean source tree -> dvc repro -> dvc.lock byte-identical
 
 given the same source, `uv.lock`, configuration, synthetic seed, and
 parameters. `dvc.lock` is tracked, and a fresh reproduction leaves it
-unchanged -- verified across two consecutive reproductions and across two
-independent source-only trees.
+unchanged -- verified across two consecutive reproductions, across two
+independent source-only trees, and in a clean Ubuntu container on a
+different libc and interpreter patch.
 
 That works through a boundary, not by deleting timestamps from artifacts
 that legitimately carry them. The Milestone 5--8 runners still record
@@ -1066,9 +1069,43 @@ is declared in their place, pinning the run id and checksumming only the
 byte-stable files -- so a real change to `metrics.json` still propagates
 to the lock, while the clock does not.
 
+**Serialized model bytes are not part of that identity, and CI is why.**
+A first version of this boundary checksummed the `.joblib` files too. It
+held locally and failed on GitHub Actions, which reported a different hash
+for the model-version directory at the same size and file count. The cause
+is measurable in this repository: `joblib` writes scikit-learn's raw tree
+node buffer verbatim, and that C struct has seven **never-initialised**
+padding bytes per node -- 112,826 per random-forest artifact here, and 191
+of 200 trees that are identical field-for-field between the plain and the
+calibrated artifact disagree in them. Two serializations of one model
+already differ.
+
+So a stage record has three classes -- portable deterministic,
+execution-specific, volatile provenance -- and a `.joblib` is
+execution-specific: named with a reason, never checksummed in a declared
+document. Its real SHA-256 goes to an
+`<name>.artifact-integrity.execution.json` sidecar, so tamper detection is
+unchanged and only the location moved. A model version therefore identifies
+the *logical* model (run, estimator, hyperparameters, data, split,
+features, configuration), and one logical version may have N serialized
+instances.
+
+Three sentences worth keeping:
+
+> Byte reproducibility of Python pickle/joblib artifacts is not assumed
+> across execution environments unless proven.
+> Logical reproducibility is not serialized binary byte identity.
+> An artifact integrity checksum is not scientific validity.
+
 Milestone 10's own documents carry no wall clock at all. When each was
 produced is written to a `<name>.execution.json` sidecar beside it, which
-is never a declared output. See DEC-100 and DEC-104.
+is never a declared output. See DEC-100, DEC-104, and DEC-105.
+
+Numerical portability across CPU microarchitectures is a separate,
+**unresolved** question: a different BLAS kernel changes the last bits of
+`metrics.json` and `predictions.parquet`. Those stay portable
+deterministic on purpose, so such a difference fails loudly rather than
+being absorbed. See `docs/LIMITATIONS.md`.
 
 ### Docker packages what already exists
 

@@ -245,6 +245,59 @@ class TestLockStability:
         assert identities(first) == identities(second)
         assert identities(first)
 
+    def test_no_declared_document_checksums_a_serialized_estimator(
+        self, two_trees: tuple[Path, Path]
+    ) -> None:
+        # DEC-105, end to end. A .joblib is named in the stage record with
+        # the reason it is excluded, and never carries a digest there.
+        stages = Path("artifacts/pipeline/mlops/stages")
+        for tree in two_trees:
+            record = read_json(tree / stages / "baseline.json")
+            assert not [
+                artifact
+                for artifact in record["deterministic_artifacts"]
+                if artifact["path"].endswith((".joblib", ".pkl", ".pickle"))
+            ]
+            excluded = [
+                path
+                for path in record["execution_specific_artifacts"]
+                if path.endswith(".joblib")
+            ]
+            assert excluded, "the baseline run persists estimators"
+
+    def test_every_model_checksum_survives_outside_the_lock(
+        self, two_trees: tuple[Path, Path]
+    ) -> None:
+        # The digest moved; it was not lost. Each tree records every model
+        # file's real SHA-256 in a sidecar that is not a declared output.
+        import hashlib
+
+        import yaml
+
+        sidecar = Path(
+            "artifacts/pipeline/mlops/stages/baseline.artifact-integrity.execution.json"
+        )
+        pipeline = Path("artifacts/pipeline")
+        run = pipeline / "experiments/baseline-engagement_class"
+        for tree in two_trees:
+            record = read_json(tree / sidecar)
+            assert record["artifacts"]
+            for entry in record["artifacts"]:
+                target = tree / pipeline / entry["path"]
+                assert target.is_file()
+                assert (
+                    hashlib.sha256(target.read_bytes()).hexdigest() == entry["sha256"]
+                )
+            assert record["paths_relative_to"]
+            recorded = {entry["path"] for entry in record["artifacts"]}
+            on_disk = {
+                str(path.relative_to(tree / pipeline))
+                for path in sorted((tree / run / "models").glob("*.joblib"))
+            }
+            assert recorded == on_disk
+            lock = yaml.safe_load((tree / "dvc.lock").read_text(encoding="utf-8"))
+            assert "artifact-integrity" not in json.dumps(lock)
+
     def test_synthetic_provenance_agrees_and_stays_ineligible(
         self, two_trees: tuple[Path, Path]
     ) -> None:

@@ -3,11 +3,14 @@
 ## Current Milestone: 10 -- MLOps and Packaging
 
 **Status:** Milestone 10 implementation **locally complete**; GitHub-hosted CI
-acceptance **pending branch push**. Scientific evaluation and human-subject
-validation remain pending. Nothing in this milestone produces evidence:
-reproducibility is not validity, tracking is not validation, registration is
-not approval, packaging is not production readiness, and drift alerts are
-engineering diagnostics.
+acceptance **pending corrected branch push**. The previous CI run on PR #9
+failed a cross-environment reproducibility check; the cause was established
+by measurement and corrected (DEC-105), and the definitive test is the next
+run. Scientific evaluation and human-subject validation remain pending.
+Nothing in this milestone produces evidence: reproducibility is not
+validity, tracking is not validation, registration is not approval,
+packaging is not production readiness, and drift alerts are engineering
+diagnostics.
 
 ## Milestone History
 
@@ -1191,14 +1194,16 @@ configured interval, where it previously refreshed only on request.
 
 **Started:** 2026-08-29
 **Completed (implementation):** 2026-08-29
+**Corrected after CI:** 2026-08-31 (cross-environment reproducibility,
+DEC-105)
 
 **Status:** Milestone 10 implementation **locally complete**;
-GitHub-hosted CI acceptance **pending branch push**. Three of the four
-PROJECT_PLAN acceptance criteria are met and verified locally; "CI passes"
-cannot be claimed until the repository owner commits and pushes and the
-workflow actually runs on GitHub-hosted runners. Scientific evaluation and
-human-subject validation remain PENDING and are unaffected by anything in
-this milestone.
+GitHub-hosted CI acceptance **pending corrected branch push**. Three of the
+four PROJECT_PLAN acceptance criteria are met and verified locally; "CI
+passes" cannot be claimed -- the previous run on PR #9 **failed** a
+cross-environment reproducibility check, which is corrected below and
+awaits a fresh run. Scientific evaluation and human-subject validation
+remain PENDING and are unaffected by anything in this milestone.
 
 **Objective (PROJECT_PLAN, verbatim):** "MLflow, DVC stages, Docker, GitHub
 Actions, model versioning, drift checks, system smoke tests, release
@@ -1206,9 +1211,11 @@ instructions."
 
 **Acceptance criteria (PROJECT_PLAN, verbatim):**
 - [x] Clean clone can reproduce the demo
-- [ ] CI passes -- workflow syntax and every command verified locally;
-      **GitHub-hosted runner execution pending branch push**. This may be
-      marked complete once GitHub Actions actually passes.
+- [ ] CI passes -- workflow syntax and every command verified locally, and
+      **the last GitHub-hosted run FAILED** the cross-environment `dvc.lock`
+      check on PR #9. Root cause established and corrected (DEC-105);
+      **execution on GitHub-hosted runners pending corrected branch push**.
+      This may be marked complete only once GitHub Actions actually passes.
 - [x] Model artifact and configuration are versioned
 - [x] Dockerized backend and dashboard work
 
@@ -1217,8 +1224,9 @@ instructions."
       and strict (`extra="forbid"`), with the refusals built in
 - [x] `src/engagevr/mlops/fingerprints.py` -- canonical hashing for
       configuration, splits, and feature schemas
-- [x] `src/engagevr/mlops/model_version.py` -- immutable, checksum-linked
-      model versions; no model file is ever loaded
+- [x] `src/engagevr/mlops/model_version.py` -- immutable **logical** model
+      versions plus the execution-specific integrity record for each
+      serialized instance; no model file is ever loaded
 - [x] `src/engagevr/mlops/mlflow_tracking.py` -- the one module that knows
       MLflow exists; opt-in, local, lazily imported
 - [x] `src/engagevr/mlops/drift.py` -- five interpretable distribution-shift
@@ -1230,8 +1238,9 @@ instructions."
 - [x] `src/engagevr/mlops/stage_record.py` -- the deterministic,
       DVC-declared representation of a stage (the orchestration boundary
       that keeps `dvc.lock` byte-stable, DEC-104)
-- [x] `src/engagevr/mlops/execution.py` -- volatile execution metadata,
-      written to a sidecar that is never a DVC output
+- [x] `src/engagevr/mlops/execution.py` -- volatile execution metadata and
+      execution-specific artifact checksums, written to sidecars that are
+      never DVC outputs
 - [x] `src/engagevr/mlops/smoke.py` -- the 13-check integrated software
       self-check
 - [x] `src/engagevr/cli_milestone10.py` -- `mlops-demo`, `model-manifest`,
@@ -1290,10 +1299,11 @@ Measured after the correction:
   stage record, the logical fingerprint, and the lock.
 
 **What was verified, with numbers:**
-- Full suite: **3680 passed, 10 skipped**. The 10 skips are the opt-in
-  hardware test (1) and the opt-in two-source-tree DVC proof (9); both were
-  run explicitly and pass. Before this milestone the baseline was 3241
-  passed, 1 skipped.
+- Full suite: **3710 passed, 12 skipped** (after the DEC-105 correction;
+  3680 passed, 10 skipped at first implementation). The 12 skips are the
+  opt-in hardware test (1) and the opt-in two-source-tree DVC proof (11);
+  both were run explicitly and pass. Before this milestone the baseline was
+  3241 passed, 1 skipped.
 - `uv run ruff format --check`, `uv run ruff check`, `uv run mypy src`: clean.
 - `uv run dvc repro` from clean outputs: 8 stages, all succeeded.
 - A second `uv run dvc repro`: every stage "didn't change, skipping";
@@ -1308,7 +1318,7 @@ Measured after the correction:
   (13 passed) -- and produced the **same** logical and configuration
   fingerprints as the working tree.
 - `system-smoke`: 13 passed, 0 failed, 0 skipped.
-- Opt-in two-source-tree proof: **9 passed in 405 s**
+- Opt-in two-source-tree proof: **11 passed in 454 s**
   (`ENGAGEVR_RUN_DVC_SYSTEM_TESTS=1 uv run pytest -m dvc_system`).
 - `mlflow-log` on two runs: local `file://.../mlruns` store, 180 and 42
   metrics, 9 and 13 artifacts, 0 skipped metrics, `is_synthetic=true`,
@@ -1325,10 +1335,95 @@ Measured after the correction:
   `git diff --exit-code -- protocol/` -- **no drift**. The Milestone 4 wire
   protocol is unchanged.
 
-**Decisions recorded:** DEC-096 through DEC-104 (see `docs/DECISIONS.md`).
+**Cross-environment reproducibility defect found by CI (corrected
+2026-08-31):**
+
+PR #9 was opened and GitHub Actions ran the three jobs. Two passed
+(`Lint, types, and the full test suite`; `Docker images build and the stack
+answers its health checks`). One failed:
+`System smoke and DVC reproducibility`, at the step
+`dvc.lock is byte-stable across a fresh reproduction`.
+
+The runner's own two reproductions agreed with each other. What disagreed
+was the runner's lock and the **committed** lock. Three entries moved:
+
+```
+artifacts/pipeline/mlops/model_versions        md5 changed
+    size: 122647, nfiles: 10   -- both UNCHANGED
+artifacts/pipeline/mlops/stages/baseline.json
+artifacts/pipeline/mlops/reproducibility.json
+```
+
+**Every local test was a same-machine test.** The two-source-tree proof runs
+two trees on one machine, so it could not detect a cross-environment defect.
+That is the process finding, and it is recorded rather than tidied away.
+
+*Root cause, established by measurement before anything was changed.*
+`joblib.dump` writes `sklearn.tree._tree.Tree.__getstate__()["nodes"]`
+verbatim, and that C struct is 57 bytes of fields padded to 64 -- **seven
+bytes per node that nothing ever initialises**. In this repository's own
+baseline run each random-forest artifact carries 112,826 such bytes, ~10,000
+of them non-zero heap residue, and **191 of the 200 trees that are identical
+field-for-field between the plain and the calibrated artifact disagree in
+that padding**. Two serializations of one model, in one process, already
+differ. Hashing a `.joblib` hashes memory that no pipeline input determines.
+
+*What was ruled out, with evidence.* A clean Ubuntu 24.04 container --
+glibc 2.39 against the development machine's 2.44, CPython 3.12.14 against
+3.12.13, four CPUs instead of eight -- reproduced all 68 generated files
+and `dvc.lock` byte for byte. Reproducing the baseline stage at 8, 4, and 1
+threads changed no artifact at 4, and at 1 changed only the two
+`hist_gradient_boosting` files while leaving `metrics.json` intact. So OS,
+libc, interpreter patch level, and thread count are not the cause.
+
+*A separate finding that is NOT absorbed.* Reproducing with only the BLAS
+kernel changed (`OPENBLAS_CORETYPE=Haswell`, then `Nehalem`) changed
+`metrics.json`, `predictions.parquet`, and `feature_importance.parquet` as
+well. Those artifacts deliberately **remain** portable deterministic, so a
+runner whose CPU produces different numbers will fail the lock check loudly
+instead of the difference being hidden. Numerical portability across CPU
+microarchitectures is untested and not claimed.
+
+*Correction (DEC-105).* A stage record now has three classifications --
+`portable_deterministic`, `execution_specific`, `volatile_provenance` --
+and `.joblib`/`.pkl`/`.pickle` are execution-specific: named with a reason,
+never checksummed inside a DVC-declared document. Their real SHA-256s go to
+`<name>.artifact-integrity.execution.json`, reusing the existing
+`.execution.json` sidecar mechanism rather than inventing a second one.
+`model_version_id` is now built from scientific and software provenance only
+-- run, target, task, estimator class, an estimator-hyperparameter
+fingerprint, dataset, split, feature-schema and configuration fingerprints,
+serializer kind, version -- so one logical version may have N serialized
+instances. The schemas **refuse** to be constructed with a serialized-model
+checksum in portable identity, so reintroducing one fails the unit tests
+rather than a runner weeks later.
+
+Nothing was weakened. The model files are written exactly as before, every
+one still has a recorded SHA-256 in two places (the run's own
+`checksums.json` and the integrity sidecar), `--verify` still re-hashes them
+and still refuses a run whose model bytes changed after it finished, and an
+unclassified new output is still treated as portable deterministic so it
+fails closed. The CI check was not touched except to print the lock diff and
+upload the stage records on failure, so the next run diagnoses rather than
+hints.
+
+Measured after the correction:
+- `dvc.lock` is byte-identical across two fresh reproductions in the working
+  tree; the second `dvc repro` skips all eight stages.
+- The clean Ubuntu 24.04 container reproduces the **same** lock, and
+  `git diff -- dvc.lock` inside it is empty. Of the 73 files compared, the
+  20 that differ are all undeclared: timestamped runner provenance and
+  execution sidecars.
+- `stages/baseline.json` lists 8 portable deterministic artifacts, 10
+  execution-specific, and 3 volatile; the 10 model checksums are all present
+  in `stages/baseline.artifact-integrity.execution.json`.
+
+**Decisions recorded:** DEC-096 through DEC-105 (see `docs/DECISIONS.md`).
 DEC-100 was revised on 2026-08-29: `dvc.lock` is tracked **and byte-stable**,
 where an earlier revision accepted a lock that churned on every reproduction.
-DEC-104 records the boundary that makes the stability possible.
+DEC-104 records the boundary that makes the stability possible; its clause
+"models included" is superseded by DEC-105, which draws the boundary in the
+right place after CI proved it was in the wrong one.
 
 **Known limitations (see `docs/LIMITATIONS.md`):**
 1. Every number this milestone touches came from synthetic data. It is a
@@ -1338,27 +1433,45 @@ DEC-104 records the boundary that makes the stability possible.
    calibrated against an outcome, a participant, or an observed failure.
 3. The drift layer has never been run against real data, real drift, or a
    real deployment. It has only ever compared two synthetic draws.
-4. Reproducibility was demonstrated on one machine, one operating system,
-   and one Python build. Cross-platform reproducibility is untested.
-5. The Docker images were built and health-checked locally. They have never
+4. Reproducibility was demonstrated on one machine and in one Linux
+   container that shares that machine's CPU. macOS, Windows, ARM, and a
+   different x86-64 microarchitecture are untested.
+5. **Byte reproducibility of Python pickle/joblib artifacts is not assumed
+   across execution environments.** A `.joblib` embeds uninitialised C
+   struct padding; its checksum is execution-specific artifact integrity,
+   not portable logical identity. Logical reproducibility is not serialized
+   binary byte identity, and an artifact integrity checksum is not
+   scientific validity.
+6. **Numerical portability across CPU microarchitectures is untested.** A
+   different BLAS kernel changes the last bits of `metrics.json`,
+   `predictions.parquet`, and `feature_importance.parquet`. Those artifacts
+   remain portable deterministic on purpose, so such a difference fails
+   loudly. Whether it occurs on GitHub's runners is unknown.
+7. The Docker images were built and health-checked locally. They have never
    been run under load, over time, or by anyone else, and packaging is not
    production readiness.
-6. CI's behaviour on GitHub-hosted runners cannot be proven from this
-   repository; only the workflow's structure and each command in isolation
-   were verified locally. **The PROJECT_PLAN criterion "CI passes" is
-   therefore NOT claimed**; it becomes claimable once the branch is pushed
-   and the workflow runs.
-7. `mlflow-skinny`'s file store is in maintenance mode upstream. The `<4`
+8. CI's behaviour on GitHub-hosted runners cannot be proven from this
+   repository. **The PROJECT_PLAN criterion "CI passes" is therefore NOT
+   claimed**; the last CI run FAILED, and the criterion becomes claimable
+   only once the corrected branch is pushed and the workflow passes.
+9. `mlflow-skinny`'s file store is in maintenance mode upstream. The `<4`
    bound is the guard; revisiting it is future work.
-8. No model is registered, promoted, approved, or validated, and no MLOps
-   record in this repository can be read as saying otherwise.
+10. No model is registered, promoted, approved, or validated, and no MLOps
+    record in this repository can be read as saying otherwise. The DEC-105
+    correction was operational and changed no scientific status:
+    `scientific_evaluation_eligible` remains `false` everywhere.
 
 **Remaining validation for this milestone:**
-1. Run the CI workflow on GitHub-hosted runners. This is the one
-   PROJECT_PLAN acceptance criterion still open.
-2. Reproduce the demo on a second operating system and a second Python
-   build.
-3. Have somebody who did not write this milestone follow
+1. Push the corrected branch and run the CI workflow on GitHub-hosted
+   runners. This is the one PROJECT_PLAN acceptance criterion still open,
+   and the previous attempt failed.
+2. If CI fails again, read the uploaded stage records: if the artifacts that
+   moved are `metrics.json`, `predictions.parquet`, or
+   `feature_importance.parquet` rather than the model files, the finding is
+   NUMERICAL portability across CPUs and must not be abstracted away.
+3. Reproduce the demo on a second operating system, a second CPU
+   microarchitecture, and a second Python build.
+4. Have somebody who did not write this milestone follow
    `docs/RELEASE.md` end to end from a genuinely clean clone.
 
 ### Milestone 11: Research Documentation

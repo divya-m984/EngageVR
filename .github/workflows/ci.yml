@@ -100,10 +100,19 @@ jobs:
           fi
 
       # The invariant DEC-100 states: a FRESH reproduction leaves the
-      # tracked dvc.lock byte-identical. Every declared output is
-      # deterministic, and the timestamped Milestone 5-8 provenance is
-      # deliberately not declared (DEC-104). A difference here means a
-      # declared output stopped being byte-stable.
+      # tracked dvc.lock byte-identical -- both on this runner and against
+      # the lock committed from a contributor's machine. Every declared
+      # output is deterministic; the timestamped Milestone 5-8 provenance
+      # (DEC-104) and the serialized estimators (DEC-105) are deliberately
+      # not declared. A difference here means a declared output stopped
+      # being byte-stable, and the second half is the CROSS-ENVIRONMENT
+      # check that same-machine testing cannot make.
+      #
+      # On failure the lock diff is printed: it names the exact declared
+      # outputs whose hashes moved, which is what distinguishes "a model
+      # binary differs" from "the numbers differ". The freshly produced
+      # stage records are uploaded below so the per-artifact checksums can
+      # be compared rather than guessed at.
       - name: dvc.lock is byte-stable across a fresh reproduction
         run: |
           sha256sum dvc.lock | tee lock-first.txt
@@ -111,12 +120,25 @@ jobs:
           uv run dvc repro
           sha256sum dvc.lock | tee lock-second.txt
           if ! diff -q lock-first.txt lock-second.txt; then
-            echo "dvc.lock changed across a fresh reproduction."
+            echo "dvc.lock changed between two reproductions on this runner."
             echo "A DVC-declared output is not byte-stable. See DEC-104."
             diff lock-first.txt lock-second.txt || true
             exit 1
           fi
-          git diff --exit-code -- dvc.lock
+          if ! git diff --exit-code -- dvc.lock; then
+            echo "::error::dvc.lock produced on this runner differs from the"
+            echo "committed lock. This is a CROSS-ENVIRONMENT reproducibility"
+            echo "failure: a declared output is not portable between the"
+            echo "machine that committed the lock and this one."
+            echo "The declared outputs named in the diff above are the ones"
+            echo "that moved. Compare them against DEC-105: a serialized"
+            echo "estimator's checksum must not be in portable identity, and"
+            echo "a change in metrics.json or predictions.parquet is a"
+            echo "NUMERICAL portability finding that must not be abstracted"
+            echo "away. Per-artifact checksums are in the uploaded stage"
+            echo "records."
+            exit 1
+          fi
 
       # Two independent executions must agree on LOGICAL identity:
       # dataset fingerprints, run identifiers, model-version identifiers,
@@ -143,15 +165,21 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           # SYNTHETIC software reports only: a smoke summary, a
-          # reproducibility manifest, and a distribution-shift
-          # diagnostic. No model binary, no dataset, no session
-          # recording, and no media is uploaded.
+          # reproducibility manifest, a distribution-shift diagnostic,
+          # the per-stage deterministic records, and the artifact-integrity
+          # sidecars. The sidecars are what make a cross-environment lock
+          # difference diagnosable rather than a guess: they carry this
+          # runner's model checksums and the environment that produced
+          # them. No model binary, no dataset, no session recording, and
+          # no media is uploaded -- a checksum is not a model.
           name: engagevr-synthetic-software-reports
           path: |
             artifacts/smoke/smoke_report.json
             artifacts/pipeline/mlops/reproducibility.json
             artifacts/pipeline/mlops/drift_report.json
             artifacts/pipeline/mlops/catalogue.json
+            artifacts/pipeline/mlops/stages/*.json
+            artifacts/pipeline/mlops/model_versions.artifact-integrity.execution.json
           retention-days: 7
           if-no-files-found: warn
 

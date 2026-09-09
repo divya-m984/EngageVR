@@ -2961,7 +2961,15 @@ this project does not follow it silently.
 ### DEC-097: A Model Version Is a Manifest, Not a Registry Entry
 
 **Date:** 2026-08-29
-**Status:** Accepted
+**Status:** Accepted, with the identifier's inputs amended by DEC-105
+
+**Amendment (2026-08-31):** "*Which bytes is it?* — SHA-256 and size of the
+`.joblib`" described a field that has since moved. The digest is still
+recorded and still checked; it lives in an artifact-integrity execution
+record rather than in the manifest, and it no longer participates in
+`model_version_id`, because pickled estimator bytes are not portable
+between environments. Everything else here — the refusal to register,
+promote, alias, or approve — stands unchanged. See DEC-105.
 
 **Context:** `docs/PROJECT_PLAN.md` requires "model artifact and
 configuration are versioned". The obvious reading is MLflow's Model
@@ -3307,7 +3315,15 @@ that has never been evaluated against a person.
 ### DEC-104: Deterministic DVC Outputs Are Separated From Volatile Execution Metadata
 
 **Date:** 2026-08-29
-**Status:** Accepted
+**Status:** Accepted, with one clause superseded by DEC-105
+
+**Amendment (2026-08-31):** this decision said the stage record "checksums
+every byte-stable file the run produced, **models included**". The words
+"models included" were wrong, and GitHub Actions proved it: a serialized
+estimator's bytes are not a function of the pipeline's inputs. Everything
+else in this decision stands unchanged — the runner/record/output boundary,
+the execution sidecars, the Python series, the fail-safe classification. Only
+the claim that a `.joblib` is byte-stable is withdrawn. See DEC-105.
 
 **Context:** DEC-100 requires `dvc.lock` to be byte-stable across fresh
 reproductions. Measured, twenty of the pipeline's fifty-six files were not:
@@ -3338,10 +3354,11 @@ output.
 
 *A stage record is declared in its place.* `DeterministicStageRecord` pins
 the stage's logical identity — the run id, itself a hash of the run's
-inputs — and checksums every byte-stable file the run produced, models
-included. The timestamped documents are listed by path **with the reason
-they vary and without a checksum**, so their contents cannot reach the lock
-while a reader can still see what was excluded and why.
+inputs — and checksums every byte-stable file the run produced. (This
+originally read "models included"; DEC-105 withdraws that.) The timestamped
+documents are listed by path **with the reason they vary and without a
+checksum**, so their contents cannot reach the lock while a reader can still
+see what was excluded and why.
 
 *A meaningful change still propagates.* Alter `metrics.json` and the
 record's checksum for it changes, so the record's bytes change, so
@@ -3379,7 +3396,198 @@ silence.
 
 **Consequence:** the pipeline satisfies a reproducibility property it can
 demonstrate byte for byte, and it does so without any Milestone 5-8 artifact
-losing a field. Forty-seven regression tests
+losing a field. Seventy-seven regression tests
 (`tests/unit/test_dvc_determinism.py`) hold the boundary in place, and an
 opt-in two-source-tree proof
 (`tests/system/test_dvc_lock_stability.py`) checks it end to end.
+
+---
+
+### DEC-105: Serialized Estimator Bytes Are Execution-Specific, Not Portable Identity
+
+**Date:** 2026-08-31
+**Status:** Accepted
+
+**Context — what CI found that local testing could not.** DEC-104's boundary
+passed every local check: two consecutive fresh reproductions in the working
+tree, and two independent source-only trees, all produced the same
+`dvc.lock`. On PR #9 the GitHub Actions job *System smoke and DVC
+reproducibility* failed at
+`dvc.lock is byte-stable across a fresh reproduction`. The runner's own two
+reproductions agreed with each other; what disagreed was the runner's lock
+and the **committed** lock. Three entries moved:
+
+```
+artifacts/pipeline/mlops/model_versions   md5 changed
+    size 122647, nfiles 10   -- both unchanged
+artifacts/pipeline/mlops/stages/baseline.json
+artifacts/pipeline/mlops/reproducibility.json
+```
+
+Same size, same file count, different bytes. Every local test in the
+repository was a **same-machine** test, and the defect is a
+**cross-environment** one, so no local test could have caught it. That is
+the process lesson as much as the technical one.
+
+**Investigation — measured, not assumed.** Four hypotheses were tested
+against this repository's own baseline run before anything was changed.
+
+*OS, libc, and interpreter patch level are not the cause.* The full pipeline
+was reproduced in a clean Ubuntu 24.04 container (glibc 2.39 against the
+development machine's 2.44, CPython 3.12.14 against 3.12.13, both installed
+by `uv python install 3.12` exactly as CI does), restricted to four CPUs to
+match a runner. Every one of the 68 generated files matched the development
+machine byte for byte, `dvc.lock` included, and `git diff -- dvc.lock` was
+empty. Only the timestamped, undeclared documents differed.
+
+*Thread count is not the cause.* The baseline stage was reproduced at 8, 4,
+and 1 OpenMP/OpenBLAS threads. At 4 threads every artifact was identical. At
+1 thread only the two `hist_gradient_boosting` artifacts changed — and
+`metrics.json` did not, so even there the numbers were unaffected.
+
+*The serialized bytes are not a function of the model.* This is the cause.
+`joblib.dump` writes `sklearn.tree._tree.Tree.__getstate__()["nodes"]`
+verbatim. That C struct is seven `intp_t`/`float64_t` fields plus one
+`unsigned char`, 57 bytes padded to 64, so **seven bytes per node are never
+initialised** and carry whatever the heap held. Measured on
+`baseline-engagement_class`:
+
+| artifact | bytes | padding bytes | non-zero padding |
+|---|---:|---:|---:|
+| `random_forest-fold0.joblib` | 1,550,483 | 112,826 | 10,585 |
+| `random_forest-fold0-calibrated.joblib` | 1,555,623 | 112,826 | 8,989 |
+
+The decisive observation needs no second machine. All **200** trees are
+identical field-for-field between those two artifacts, and **191 of them
+have different padding bytes**. Two serializations of one model, in one
+process, already disagree. Inspecting the residue shows what it is: node 1
+of the first tree carries little-endian `21, 22, 23`, node 2 carries
+`53, 54, 55`, node 3 carries `85, 86, 87` — a freed index array, stepping by
+32 per node — while other nodes carry `0xFF` fill from a different freed
+region.
+
+Hashing a `.joblib` therefore hashes memory that no pipeline input
+determines. Whether two environments agree on it is luck.
+
+*A finding that must not be hidden: numerical portability across CPUs is
+narrower than this.* Reproducing the baseline stage with only the OpenBLAS
+kernel changed (`OPENBLAS_CORETYPE=Haswell`, then `Nehalem`, standing in for
+a different CPU) changed `metrics.json`, `predictions.parquet`, and
+`feature_importance.parquet` as well as the model files. Those are ordinary
+last-bit floating-point differences from a different BLAS kernel, and this
+decision does **not** absorb them: those artifacts stay portable
+deterministic, so if a runner's CPU ever produces different numbers the lock
+check fails loudly and says so. See `docs/LIMITATIONS.md`.
+
+*What could not be established from here.* The GitHub runner's per-file
+checksums are not available, so whether *its* difference was the padding
+alone or also a numerical difference cannot be proven from this machine. The
+circumstantial evidence points at the padding: the `uncertainty` stage fits
+the same estimator types on the same data and its record did not move, and
+the only structural difference between the two stages is that `baseline`
+persists ten `.joblib` files and `uncertainty` persists none. CI now prints
+the lock diff and uploads the stage records so the next run answers this
+with data instead of inference.
+
+**Decision:** distinguish **portable logical reproducibility** from
+**execution-specific artifact integrity**, and never let the second
+masquerade as the first.
+
+*Three classifications, not two.* `classify()` now returns
+`portable_deterministic`, `execution_specific`, and `volatile_provenance`.
+A `.joblib`, `.pkl`, or `.pickle` is execution-specific: it is listed in the
+stage record **by path and reason, without a checksum**. An unclassified new
+output is still treated as portable deterministic and still fails loudly, so
+this is a named exclusion, not an open door.
+
+*The digest is not lost, it is relocated.* Every model file's real SHA-256,
+size, and the environment that produced it go to
+`<name>.artifact-integrity.execution.json` — the existing `.execution.json`
+sidecar mechanism from DEC-104, reused rather than duplicated, so every rule
+that already kept a sidecar out of `dvc.yaml`, out of the images, and out of
+every identity applies unchanged. Tamper detection is not weakened: the
+model file is still hashed, the run's own `checksums.json` still records it,
+`model-manifest --verify` still checks it and still refuses to version a run
+whose model bytes changed after it finished, and altering a model file still
+changes its integrity record. A test asserts each of those.
+
+*Logical model version, serialized artifact instance.* `model_version_id`
+was built from provenance **and** the `.joblib` SHA-256, which is why the
+same model was renamed on the runner. It is now provenance only: source run
+id, target, task type, estimator type and class, an
+`estimator_parameters_fingerprint` over the run's recorded hyperparameters,
+the dataset, split, feature-schema and configuration fingerprints, the
+serializer kind, and the EngageVR version. The relation becomes
+
+```
+one logical model version  ->  N serialized artifact instances
+```
+
+which is the truthful relation when two environments legitimately serialize
+one model into different bytes. `ModelVersionManifest` loses
+`model_artifact_sha256` and `model_artifact_bytes`, keeps
+`model_artifact_path`, gains `model_artifact_integrity_document` naming
+where the digest went, and no longer lists the model file among
+`referenced_checksums`.
+
+*The schema refuses the mistake rather than discouraging it.*
+`DeterministicStageRecord`, `ReproducibilityStage`, and
+`ModelVersionManifest` all raise if a `.joblib`/`.pkl`/`.pickle` appears in
+portable identity. Somebody reintroducing a serialized-model checksum into a
+DVC-declared document cannot construct the document, so CI fails at the unit
+tests rather than three weeks later on a different machine.
+
+*Propagation is preserved.* A change to source, parameters, configuration,
+dataset content, the split design, an estimator's hyperparameters,
+`metrics.json`, `predictions.parquet`, or any report still changes the
+relevant record and therefore the lock. Tests assert both directions:
+mutating a model binary alone must **not** change the logical version;
+mutating the estimator configuration, run id, dataset fingerprint, target,
+task type, or split assignment **must**.
+
+**A second hazard, found while validating this.** `pre-commit run
+--all-files` reported `Fixing dvc.lock`: the `trailing-whitespace` hook
+strips the trailing space DVC writes on each of the lock's 22 wrapped
+command lines, and a subsequent `dvc repro` does not restore it because
+nothing changed. A whitespace-stripped lock that is then committed fails
+`git diff --exit-code -- dvc.lock` on the next fresh reproduction — the
+same CI step, for a completely unrelated reason. `dvc.lock` is now excluded
+from `trailing-whitespace` and `end-of-file-fixer`: a formatter must not
+rewrite a generated lock file. A unit test asserts both exclusions and that
+the lock still contains the wrapped lines they would have stripped.
+
+**What was refused.** Committing a runner-generated lock so CI would pass;
+making the runner's lock authoritative; untracking or gitignoring
+`dvc.lock`; disabling or relaxing the equality check; deleting the
+two-source-tree test; `always_changed`; dropping outputs from hashing;
+pinning the pipeline to one machine; rounding or mutating model parameters
+to force matching bytes. Each would have replaced a true statement the
+project could not yet make with a false one it could.
+
+**Verified.** `dvc repro` twice in the working tree leaves `dvc.lock`
+unchanged and all eight stages report "didn't change, skipping". The
+two-source-tree proof passes with two added assertions (11 tests). A clean
+Ubuntu 24.04 container — glibc 2.39 against 2.44, CPython 3.12.14 against
+3.12.13, four CPUs against eight — reproduces the **same** lock, and
+`git diff -- dvc.lock` inside it is empty; of the 73 files compared, the 20
+that differ are all undeclared timestamped provenance or execution
+sidecars. Thirty extra regression tests were added, 77 in
+`tests/unit/test_dvc_determinism.py` in total; the full suite is
+3710 passed, 12 skipped.
+
+No lock digest is quoted here, for the reason DEC-100 gives: the lock
+depends on the source by design, and a digest in prose goes stale on the
+next commit. `make dvc-verify` recomputes and compares it.
+
+The definitive test is the next GitHub Actions run, which no local
+environment can stand in for — a container shares the host CPU and is not
+GitHub's runner — and Milestone 10 is not complete until it passes.
+
+**Consequence:** the repository now claims byte reproducibility only for
+artifacts that have it, and says exactly why the others are excluded and
+where their checksums went. Byte reproducibility of a Python pickle is not
+assumed across execution environments; logical reproducibility is not
+serialized binary byte identity; and an artifact integrity checksum is not
+scientific validity. No model became production, champion, approved, or
+validated, and `scientific_evaluation_eligible` remains `false` everywhere:
+this was an operational defect and an operational repair.

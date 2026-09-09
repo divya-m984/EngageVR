@@ -949,41 +949,103 @@ against real capture data, real distributional change, real model
 degradation, or a real deployment. Its behaviour under any of those is
 unknown.
 
-### Reproducibility was demonstrated on one machine
+### Reproducibility was demonstrated on one machine, and CI found the gap
 
 Two independent executions, and two independent source-only trees, on one
-machine, one operating system (Arch Linux), one Python build (3.12.13),
-one library set. That demonstrates the pipeline is deterministic with
-respect to its own inputs. It does **not** demonstrate cross-platform,
-cross-architecture, or cross-version reproducibility, none of which has
-been attempted.
+machine (Arch Linux, CPython 3.12.13). That demonstrates the pipeline is
+deterministic with respect to its own inputs. **It does not demonstrate
+cross-environment reproducibility, and an early version of this section
+implied more than the evidence supported.**
 
-Within that scope the property is byte-for-byte, not merely logical:
-every DVC-declared output is byte-identical across fresh executions, and
-so is `dvc.lock`. That holds because the timestamped Milestone 5--8
-provenance is deliberately **not** DVC-declared, not because it was
-removed — a run still records when it happened, and a deterministic stage
-record is declared in the run directory's place (DEC-104).
+GitHub Actions found the difference. On PR #9 the job
+`dvc.lock is byte-stable across a fresh reproduction` failed — not between
+the runner's own two reproductions, which agreed, but between the runner's
+lock and the committed one. Three entries moved:
+`mlops/model_versions` (same size, same file count, different bytes),
+`mlops/stages/baseline.json`, and `mlops/reproducibility.json`. **Every
+local test was a same-machine test, so no local test could have caught
+it.** That is the honest lesson; it is recorded rather than tidied away.
 
-Two consequences worth stating plainly. First, the guarantee is scoped to
-"same source, same `uv.lock`, same configuration, same seed, same
+Within the corrected scope the property is byte-for-byte: every
+DVC-declared output is byte-identical across fresh executions, and so is
+`dvc.lock`. That holds because two classes of file are deliberately not
+part of portable identity — the timestamped Milestone 5–8 provenance
+(DEC-104) and the serialized estimators (DEC-105) — not because anything
+was removed. A run still records when it happened, and every model file is
+still written and still checksummed.
+
+Since the correction, the pipeline has also been reproduced in a clean
+Ubuntu 24.04 container on a different libc (2.39 against 2.44), a
+different CPython patch (3.12.14 against 3.12.13), and four CPUs instead
+of eight, producing a byte-identical `dvc.lock`. A container shares the
+host CPU, so that is not the same as a different machine, and **GitHub's
+runner remains the only test that settles it.**
+
+Three consequences worth stating plainly. First, the guarantee is scoped
+to "same source, same `uv.lock`, same configuration, same seed, same
 parameters"; change any of those and the lock changes, which is the
-mechanism working. Second, a file this repository has not classified as
-timestamped is checksummed by default, so a *new* volatile output would
-surface as a failing two-execution test rather than as silent churn —
-which is the failure mode to prefer, but it does mean the classification
-list is a thing to maintain.
+mechanism working. Second, a file this repository has not classified is
+checksummed by default, so a *new* unstable output surfaces as a failing
+reproduction test rather than as silent churn — the failure mode to
+prefer, but it means the classification list must be maintained. Third,
+macOS, Windows, ARM, and a different x86-64 microarchitecture remain
+untested.
+
+### Pickle byte reproducibility is not assumed, because it is not true
+
+`joblib.dump` writes `sklearn.tree._tree.Tree`'s raw `nodes` buffer
+verbatim, and that C struct is 57 bytes of fields padded to 64 — **seven
+bytes per node that nothing ever initialises**. Measured on this
+repository's own baseline run, each random-forest artifact carries 112,826
+such bytes, roughly ten thousand of them non-zero heap residue, and 191 of
+the 200 trees that are identical field-for-field between the plain and the
+calibrated artifact disagree in that padding. Two serializations of one
+model, in one process, already differ.
+
+So the SHA-256 of a `.joblib` is an **integrity fact about one execution**,
+not a portable identity, and this repository does not treat it as one. It
+is still recorded — in the run's own `checksums.json` and in an
+`<name>.artifact-integrity.execution.json` sidecar — and tamper detection
+is unchanged.
+
+Stated as the three things a reader should take away:
+
+- Byte reproducibility of Python pickle/joblib artifacts is **not assumed**
+  across execution environments unless proven.
+- Logical reproducibility is **not** serialized binary byte identity.
+- An artifact integrity checksum is **not** scientific validity.
+
+### Numerical portability across CPU microarchitectures is untested
+
+A separate and unresolved question. Reproducing the baseline stage with
+only the OpenBLAS kernel changed (`OPENBLAS_CORETYPE=Haswell`, then
+`Nehalem`, standing in for a different CPU) changed `metrics.json`,
+`predictions.parquet`, and `feature_importance.parquet` as well as the
+model files: ordinary last-bit floating-point differences from a different
+kernel, propagating through an iterative solver.
+
+Those artifacts are deliberately **left** in portable deterministic
+identity. If a runner's CPU ever produces different numbers, the lock check
+fails and says so, rather than the difference being absorbed by an
+abstraction. Whether the numbers are portable across the CPUs GitHub
+actually schedules is not known and is not claimed.
 
 ### A model version is not an approval
 
-`ModelVersionManifest` records where an estimator came from, which bytes
-it is, and what may be said about it. There is no field for a stage, an
-alias, a promotion, or an approval, because nobody has made that decision
-about any model here.
+`ModelVersionManifest` records where an estimator came from and what may
+be said about it. There is no field for a stage, an alias, a promotion, or
+an approval, because nobody has made that decision about any model here.
+
+It identifies the **logical** model — run, estimator, hyperparameters,
+data, split, features, configuration — not a particular pickle. One logical
+version may correspond to several serialized instances, because two correct
+environments can legitimately serialize one model into different bytes.
 
 No model in this repository has been evaluated against a real participant
 label. No model is production-ready, validated, approved, or a champion,
-and the schema rejects those words.
+and the schema rejects those words. The DEC-105 correction was operational
+and changed none of this: `scientific_evaluation_eligible` remains `false`
+everywhere.
 
 Model files remain Python pickles: loading one executes code in it.
 Nothing in Milestone 10 loads one; versioning hashes bytes.
@@ -1021,15 +1083,22 @@ bridge and a filesystem browser for the artifact root.**
 There is no model-serving API in either image, because there is no
 validated model to serve.
 
-### CI has not yet run, and the acceptance criterion is not claimed
+### CI has not yet passed, and the acceptance criterion is not claimed
 
 Each command in `.github/workflows/ci.yml` was run locally and the
 workflow's structure is asserted by tests. Whether GitHub-hosted runners
-behave the same way can only be established by pushing the branch.
+behave the same way can only be established by pushing the branch — and on
+PR #9 they did not: the `System smoke and DVC reproducibility` job failed
+the cross-environment lock check, which is what DEC-105 corrects. Two of
+the three jobs passed.
+
+That is the concrete demonstration that local validation is not a
+substitute for CI, and it is the reason this section says "has not yet
+passed" rather than "has not yet run".
 
 **The PROJECT_PLAN acceptance criterion "CI passes" is therefore open, not
 met.** It becomes claimable once the repository owner commits, pushes, and
-the workflow actually passes. Local validation is not a substitute, and
+the workflow actually passes on the corrected branch.
 `docs/PROGRESS.md` records the criterion as unchecked.
 
 CI passing would not imply scientific validity in any case: every dataset

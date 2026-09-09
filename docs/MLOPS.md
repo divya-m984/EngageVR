@@ -75,13 +75,13 @@ operational bookkeeping.
 |---|---|
 | `src/engagevr/schemas/mlops.py` | Every persisted M10 record, versioned and strict (`extra="forbid"`) |
 | `src/engagevr/mlops/fingerprints.py` | Canonical hashing for configuration, splits, feature schemas |
-| `src/engagevr/mlops/model_version.py` | Immutable, checksum-linked model versions |
+| `src/engagevr/mlops/model_version.py` | Immutable **logical** model versions; each serialized instance's checksum goes to an execution sidecar |
 | `src/engagevr/mlops/mlflow_tracking.py` | The one module that knows MLflow exists |
 | `src/engagevr/mlops/drift.py` | Distribution-shift diagnostics |
 | `src/engagevr/mlops/pipeline.py` | Stage definitions shared by `dvc.yaml` and `mlops-demo` |
 | `src/engagevr/mlops/reproducibility.py` | Logical identity across executions |
 | `src/engagevr/mlops/stage_record.py` | The deterministic, DVC-declared representation of a stage |
-| `src/engagevr/mlops/execution.py` | Volatile execution metadata, written to a never-declared sidecar |
+| `src/engagevr/mlops/execution.py` | Volatile execution metadata and execution-specific artifact checksums, in never-declared sidecars |
 | `src/engagevr/mlops/smoke.py` | The integrated software self-check |
 | `src/engagevr/cli_milestone10.py` | The six commands |
 
@@ -283,22 +283,25 @@ participant media, and no credential can enter a tracking store.
 
 ## 4. Model versioning
 
-`ModelVersionManifest` is an **immutable, checksum-linked record of one
-serialized estimator**. It is not a registry entry. It answers three
-questions and refuses a fourth.
+`ModelVersionManifest` is an **immutable record of one fitted estimator**.
+It is not a registry entry. It answers three questions and refuses a
+fourth.
 
 **Where did this come from?** `source_run_id`, `source_run_family`,
 `source_run_directory`, `dataset_fingerprint`, `split_fingerprint`,
-`feature_schema_fingerprint`, `feature_catalog_version`, `feature_count`,
-the embedded `ConfigurationVersion`, `fold_index`, `is_calibrated`,
+`feature_schema_fingerprint`, `estimator_parameters_fingerprint`,
+`feature_catalog_version`, `feature_count`, the embedded
+`ConfigurationVersion`, `fold_index`, `is_calibrated`,
 `calibration_method`, `estimator_type`, `estimator_class`,
-`engagevr_version`, `python_version`, `dependency_versions`.
+`engagevr_version`, `python_series`, `dependency_versions`.
 
-**Which bytes is it?** `model_artifact_path`, `model_artifact_sha256`,
-`model_artifact_bytes`, `referenced_checksums` (the run's recorded digests
-for `dataset.json`, `feature_catalog.json`, `splits.json`, `metrics.json`,
-and the model file), `serialization_format` = `joblib-pickle`,
-`serialization_library_version`.
+**Which bytes is it?** `model_artifact_path`, `referenced_checksums` (the
+run's recorded digests for `feature_catalog.json`, `splits.json`, and
+`metrics.json`), `serialization_format` = `joblib-pickle`,
+`serialization_library_version`, and
+`model_artifact_integrity_document` — the name of the record that holds
+the artifact's actual SHA-256. That digest is **not** in this manifest;
+see below.
 
 **What may be said about it?** `evaluation_mode`, `is_synthetic`,
 `scientific_evaluation_eligible`, `data_source_counts`, `disclaimers`,
@@ -308,6 +311,35 @@ and `limitation`.
 `status`, no `promoted`, no `approved_by`. A test asserts none of those
 names exists. `MODEL_VERSION_LIMITATION` says so in words on every record.
 
+### One logical version, N serialized instances
+
+The manifest is a DVC-declared output, so everything in it must be
+portable. A `.joblib`'s SHA-256 is not — see §6, *Serialized model bytes
+are execution-specific*, and DEC-105 — so the relation this layer models
+is:
+
+```
+one logical model version   ->   N serialized artifact instances
+```
+
+The logical version is the *scientific and software* identity of a fitted
+estimator: which run, which estimator with which hyperparameters, which
+data, split, features, and configuration. Two machines that fit that same
+model agree on it, even when their pickles differ.
+
+Each concrete instance's digest lives in
+`model_versions.artifact-integrity.execution.json`, beside the version
+directory and never DVC-declared. It records, per file: the
+pipeline-relative path, the actual SHA-256, the size in bytes, and why the
+digest is excluded from portable identity — plus the interpreter, library
+versions, and platform of the execution that produced it, because those
+are the explanation.
+
+**Artifact integrity is not scientific validity.** A matching SHA-256 says
+the bytes on disk are the bytes that were written. It says nothing about
+whether the estimator is correct or useful, and two environments
+disagreeing is expected rather than alarming.
+
 ### The identifier
 
 ```
@@ -315,11 +347,15 @@ mv-<target>-<model name>-<sha256(...)[:12]>
 ```
 
 The digest covers the source run id, target, task type, estimator type,
-model name, dataset fingerprint, split fingerprint, feature-schema
-fingerprint, configuration fingerprint, serialization format, the model
-artifact's SHA-256, and the EngageVR version. **No wall clock and no
-random component participates**, so re-deriving a version from the same
-run reproduces the identifier rather than minting a new one.
+estimator class, the estimator-hyperparameter fingerprint, model name,
+dataset fingerprint, split fingerprint, feature-schema fingerprint,
+configuration fingerprint, serialization format, and the EngageVR version.
+**No wall clock, no random component, and no serialized-artifact checksum
+participates**, so re-deriving a version from the same run on any machine
+reproduces the identifier rather than minting a new one.
+
+It used to include the `.joblib` SHA-256, and that is exactly what renamed
+every model version on the GitHub runner. See DEC-105.
 
 ### Safety properties
 
@@ -329,8 +365,12 @@ run reproduces the identifier rather than minting a new one.
 - **The run is not modified.** A test hashes the whole run directory
   before and after and asserts equality.
 - **Tampering is refused at build time.** If a model file's bytes no
-  longer match the digest the run recorded, `build_model_versions` raises
-  rather than certifying content the run never produced.
+  longer match the digest the run recorded in its own `checksums.json`,
+  `build_model_versions` raises rather than certifying content the run
+  never produced. Moving the digest out of the portable manifest did not
+  change this.
+- **`--verify` still re-hashes every model file** and fails on a mismatch,
+  now against the integrity record.
 - **A failed or interrupted run cannot be versioned.**
 - **Generated binaries are never committed.** `artifacts/` and `models/`
   are gitignored, and a test walks `git ls-files` asserting no
@@ -503,10 +543,9 @@ The `baseline` and `uncertainty` stages declare
 `mlops/stages/<stage>.json` rather than their run directory. Each record
 pins the stage's **logical identity** (the run id, itself a hash of the
 run's inputs) and checksums every byte-stable file the run produced —
-`metrics.json`, `splits.json`, `calibration.json`, the Parquet tables,
-and every `models/*.joblib`. The timestamped documents are listed by path
-with the reason they vary, and **without a checksum**, so their contents
-cannot reach the lock.
+`metrics.json`, `splits.json`, `calibration.json`, and the Parquet
+tables. The timestamped documents are listed by path with the reason they
+vary, and **without a checksum**, so their contents cannot reach the lock.
 
 The dataset stages do the same: `reference.parquet` and
 `reference.feature_catalog.json` are declared, `reference.metadata.json`
@@ -516,13 +555,56 @@ stage's logical identity.
 **A meaningful change still propagates.** Alter `metrics.json` and the
 record's checksum for it changes, so the record's own bytes change, so
 `dvc.lock` changes and every downstream stage re-runs. What no longer
-propagates is the clock.
+propagates is the clock, or one machine's heap.
+
+### Serialized model bytes are execution-specific
+
+A stage record has **three** classifications, not two:
+
+| classification | in the record | checksummed | reaches `dvc.lock` |
+|---|---|---|---|
+| `portable_deterministic` | path + SHA-256 + size | yes | yes |
+| `execution_specific` | path + reason | no, not here | no |
+| `volatile_provenance` | path + reason | no, anywhere | no |
+
+The middle row exists because of a defect GitHub Actions found and local
+testing could not. `joblib.dump` writes scikit-learn's raw tree-node
+buffer verbatim, and that C struct has **seven bytes of padding per node
+that nothing ever initialises**. Measured on this repository's own
+`baseline-engagement_class` run, each random-forest artifact carries
+112,826 such bytes, around ten thousand of them non-zero heap residue —
+and 191 of the 200 trees that are identical field-for-field between the
+plain and the calibrated artifact **disagree in that padding**. Two
+serializations of one model, in one process, already differ.
+
+So:
+
+> **Byte reproducibility of Python pickle/joblib artifacts is not assumed
+> across execution environments unless proven.**
+>
+> **Logical reproducibility is not serialized binary byte identity.**
+
+`.joblib`, `.pkl`, and `.pickle` are therefore execution-specific by name.
+Their real digests go to `<name>.artifact-integrity.execution.json` beside
+the stage record, which is never DVC-declared. The files themselves are
+written exactly as before, still hashed, still tamper-checked. Nothing was
+deleted; a checksum moved to where it is true.
+
+The schema enforces it: `DeterministicStageRecord`, `ReproducibilityStage`,
+and `ModelVersionManifest` all **refuse to be constructed** with a
+serialized estimator in portable identity. Reintroducing one fails the unit
+tests immediately rather than a runner three weeks later.
 
 Classification is explicit, in
-`engagevr.mlops.stage_record.VOLATILE_ARTIFACT_REASONS`. A file this
-repository has not classified is treated as **deterministic** and
-checksummed — so if it turns out to vary, the two-execution test fails
-loudly rather than the guarantee weakening in silence.
+`engagevr.mlops.stage_record` — `VOLATILE_ARTIFACT_REASONS` and
+`SERIALIZED_ESTIMATOR_SUFFIXES`. A file this repository has not classified
+is treated as **portable deterministic** and checksummed — so if it turns
+out to vary, the two-execution test fails loudly rather than the guarantee
+weakening in silence. Exclusion is always a named decision.
+
+See DEC-105 for the full investigation, and `docs/LIMITATIONS.md` for the
+separate, unresolved question of numerical portability across CPU
+microarchitectures.
 
 ### Where the wall clock went: execution sidecars
 
@@ -534,13 +616,26 @@ execution.
 
 ```
 artifacts/pipeline/mlops/
-    stages/baseline.json              declared, byte-stable
-    stages/baseline.execution.json    NOT declared, carries the timestamp
-    drift_report.json                 declared, byte-stable
-    drift_report.execution.json       NOT declared
-    reproducibility.json              declared, byte-stable
-    reproducibility.execution.json    NOT declared
+    stages/baseline.json                            declared, portable
+    stages/baseline.execution.json                  NOT declared, timestamp
+    stages/baseline.artifact-integrity.execution.json
+                                                    NOT declared, model SHA-256s
+    drift_report.json                               declared, portable
+    drift_report.execution.json                     NOT declared
+    model_versions/                                 declared, portable
+    model_versions.execution.json                   NOT declared
+    model_versions.artifact-integrity.execution.json
+                                                    NOT declared, model SHA-256s
+    reproducibility.json                            declared, portable
+    reproducibility.execution.json                  NOT declared
 ```
+
+The integrity sidecar reuses the `.execution.json` suffix deliberately:
+every rule that already kept an execution sidecar out of `dvc.yaml`, out
+of the Docker images, and out of every identity applies to it unchanged,
+because it *is* one. It is written even when a stage produced no
+serialized estimator, so "this stage produced none" is an assertion on
+disk rather than a missing file.
 
 The Milestone 10 documents themselves — model versions, the drift report,
 the reproducibility manifest, the stage records — now carry **no
@@ -563,6 +658,21 @@ Two smaller consequences of the same rule:
   included, so its digest is volatile; the dataset is pinned by
   `dataset_fingerprint` instead, which excludes the wall clock by
   construction.
+
+### Nothing may rewrite `dvc.lock`
+
+DVC wraps long stage commands and leaves a trailing space on each
+continued line — 22 of them in this lock. `pre-commit`'s
+`trailing-whitespace` hook strips them, and a later `dvc repro` does not
+put them back, because nothing changed. A stripped lock that gets
+committed then fails `git diff --exit-code -- dvc.lock` on the next fresh
+reproduction: the same CI step as DEC-105, for an entirely unrelated
+reason.
+
+`dvc.lock` is therefore excluded from `trailing-whitespace` and
+`end-of-file-fixer`. A formatter must not rewrite a generated lock file,
+and a unit test asserts both exclusions remain. If `pre-commit` ever
+prints `Fixing dvc.lock`, restore it with `dvc repro` before committing.
 
 ### `.dvc/config`
 
@@ -590,20 +700,24 @@ record `started_at_utc` and `finished_at_utc`; dataset metadata records
 `created_at_utc`; a model-version record and a drift report each record
 when they were built.
 
-So `ReproducibilityManifest` separates two things:
+So `ReproducibilityManifest` separates three things:
 
 - **Logical identity** — dataset fingerprints, run identifiers,
   model-version identifiers, the drift report fingerprint, the catalogue
   digest, plus the pipeline-relative path and SHA-256 of every artifact
-  declared deterministic. This is `logical_fingerprint`.
+  declared portable deterministic. This is `logical_fingerprint`.
+- **Execution-specific record** — the serialized estimators, listed by
+  path with the reason their bytes belong to one execution and
+  deliberately **without** a checksum here. Their real digests are in the
+  artifact-integrity sidecars.
 - **Volatile record** — the timestamped documents, listed by path with
   the reason they vary and deliberately **without** a checksum.
 
 **Excluded from identity, always** (a required field of the manifest):
 wall-clock time — which appears nowhere in the document at all — absolute
 paths and temporary directories, the timestamped provenance documents the
-runners write, MLflow run and experiment identifiers, the host platform,
-and the process identifier.
+runners write, the SHA-256 of every serialized estimator, MLflow run and
+experiment identifiers, the host platform, and the process identifier.
 
 Artifact paths are recorded relative to the pipeline root, never
 absolute: an absolute path is a fact about one machine, and a temporary
@@ -648,7 +762,14 @@ ENGAGEVR_RUN_DVC_SYSTEM_TESTS=1 uv run pytest -m dvc_system
 ```
 
 Skipping it is not passing it. The always-on regression coverage is
-`tests/unit/test_dvc_determinism.py` (47 tests).
+`tests/unit/test_dvc_determinism.py` (77 tests).
+
+**Both are same-machine checks**, and that is their limit: two trees on one
+machine cannot detect a difference between two machines. That is exactly
+how the DEC-105 defect reached CI. The step is still worth running — it
+catches a stage that stopped being deterministic at all — but the
+cross-environment answer comes from the container check in
+`docs/RELEASE.md` §4 and, definitively, from GitHub Actions.
 
 ---
 
@@ -943,13 +1064,36 @@ The `logical_fingerprint` produced in that clean tree was **identical** to
 the one produced in the working tree, as was the configuration
 fingerprint. Nothing local was required.
 
+### Verified across environments, after the DEC-105 correction
+
+The check above is a *same-machine* one, and that is precisely the class of
+check that missed the DEC-105 defect. The pipeline was therefore also
+reproduced inside a clean **Ubuntu 24.04 container** — a different libc
+(glibc 2.39 against the development machine's 2.44), a different CPython
+patch (3.12.14 against 3.12.13, both installed by `uv python install 3.12`
+exactly as CI does), and four CPUs instead of eight:
+
+```
+uv sync --locked            -> 0
+uv run dvc repro            -> 0, 8 stages ran
+git diff -- dvc.lock        -> empty
+```
+
+Every declared output matched the development machine byte for byte. Only
+the undeclared, timestamped documents and the execution sidecars differed,
+which is what they are for.
+
+**What this does not prove.** A container shares the host CPU, so it cannot
+reproduce a difference in BLAS kernel dispatch, and it is not GitHub's
+runner. The definitive test remains the next CI run.
+
 ---
 
 ## 13. Generated files, and where they go
 
 | Path | Contents | Git |
 |---|---|---|
-| `artifacts/pipeline/` | Datasets, run directories, model versions, drift report, catalogue, reproducibility manifest | ignored |
+| `artifacts/pipeline/` | Datasets, run directories, model versions, drift report, catalogue, reproducibility manifest, execution and artifact-integrity sidecars | ignored |
 | `artifacts/smoke/` | Smoke scratch output and `smoke_report.json` | ignored |
 | `mlruns/` | The local MLflow file store | ignored |
 | `.dvc/cache/`, `.dvc/tmp/`, `.dvc/config.local` | DVC runtime state | ignored |
@@ -1001,7 +1145,7 @@ Model files remain executable content. Nothing in Milestone 10 loads one.
 | Command | What it does |
 |---|---|
 | `mlops-demo` | The whole deterministic SYNTHETIC pipeline, in one process |
-| `model-manifest` | Immutable, checksum-linked model versions from a run |
+| `model-manifest` | Immutable logical model versions from a run, plus each artifact's integrity record |
 | `drift-check` | Distribution-shift diagnostic between two named datasets |
 | `mlflow-log` | Log finished runs to a LOCAL MLflow store |
 | `repro-manifest` | Build (and optionally compare) a reproducibility manifest |
@@ -1055,8 +1199,20 @@ See `docs/LIMITATIONS.md` for the full statement. In short:
   validated.
 - A drift diagnostic has never been run against real data, real drift, or
   a real deployment.
-- The two-execution reproducibility check has been run on one machine,
-  one operating system, one Python build. Cross-platform reproducibility
+- **Serialized estimator bytes are not portable and are not claimed to
+  be.** A `.joblib` embeds uninitialised C struct padding; its checksum is
+  an integrity fact about one execution, not a portable identity. This was
+  discovered by CI, not by design — see DEC-105.
+- **Numerical portability across CPU microarchitectures is untested and
+  not guaranteed.** Forcing a different BLAS kernel changes
+  `metrics.json`, `predictions.parquet`, and `feature_importance.parquet`
+  in the last bits. Those artifacts remain portable deterministic, so a
+  runner whose CPU disagrees will fail the lock check loudly rather than
+  silently — which is the intended behaviour, and an unresolved question,
+  not a solved one.
+- The two-execution reproducibility check has been run on one machine and
+  in one Linux container that shares that machine's CPU. Reproducibility
+  on macOS, on Windows, on ARM, and on a different x86-64 microarchitecture
   is untested.
 - The Docker images have been built and health-checked locally; they have
   never been run under load, over time, or by anyone else.

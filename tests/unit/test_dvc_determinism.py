@@ -17,6 +17,31 @@ own provenance documents; those documents are simply never DVC-declared.
 A deterministic stage record is declared in their place, pinning the run
 id and checksumming only the byte-stable files.
 
+The boundary was drawn in the wrong place once
+-----------------------------------------------
+DEC-104 originally checksummed *every* non-timestamped file a stage
+produced, "models included".  That held on one machine and failed on
+GitHub Actions, which reported a changed hash for
+``artifacts/pipeline/mlops/model_versions`` — same size, same file count,
+different bytes — propagating into ``stages/baseline.json`` and
+``reproducibility.json``.
+
+The cause is not a bug in the pipeline.  ``joblib.dump`` writes
+scikit-learn's raw tree-node buffer, whose C struct has seven bytes of
+padding per node that nothing initialises; the baseline run's
+random-forest artifacts carry 112,826 such bytes each, about ten thousand
+of them non-zero heap residue.  191 of the 200 trees that are identical
+field-for-field between the plain and the calibrated artifact disagree in
+that padding — so two serializations of *one model in one process*
+already differ.  Hashing a ``.joblib`` hashes memory no pipeline input
+determines.
+
+DEC-105 therefore adds a third classification, ``execution_specific``,
+and the tests below hold the corrected boundary: a serialized estimator
+may never be portable deterministic identity, its real SHA-256 must still
+be recorded, and a logical model version must not move when only those
+bytes do.
+
 These tests exercise the property structurally and at the unit level.
 The end-to-end proof — two independent fresh source trees producing the
 same ``dvc.lock`` — is in ``tests/system/test_dvc_lock_stability.py``,
@@ -37,11 +62,20 @@ import yaml
 from engagevr.config import load_config
 from engagevr.mlops.execution import (
     EXECUTION_SUFFIX,
+    INTEGRITY_SUFFIX,
     build_execution_metadata,
+    integrity_sidecar_path,
     sidecar_path,
     write_execution_sidecar,
+    write_integrity_sidecar,
 )
-from engagevr.mlops.model_version import build_model_versions
+from engagevr.mlops.model_version import (
+    build_model_artifact_integrity,
+    build_model_versions,
+    read_artifact_integrity,
+    verify_model_version,
+    write_model_versions,
+)
 from engagevr.mlops.pipeline import build_stages, default_layout, load_parameters
 from engagevr.mlops.stage_record import (
     VOLATILE_ARTIFACT_REASONS,
@@ -49,17 +83,23 @@ from engagevr.mlops.stage_record import (
     StageRecordError,
     build_stage_record,
     classify,
+    is_execution_specific,
     is_volatile,
     normalize_command,
     read_stage_record,
     run_identity,
     write_stage_record,
 )
+from engagevr.schemas.experiments import SOFTWARE_SELF_CHECK_BANNER
 from engagevr.schemas.mlops import (
+    SERIALIZED_ESTIMATOR_SUFFIXES,
+    ArtifactIntegrityRecord,
+    DeterministicArtifact,
     DeterministicStageRecord,
     ExecutionMetadata,
     assert_python_series,
     assert_relative_path,
+    is_serialized_estimator,
     python_series,
 )
 
@@ -115,16 +155,21 @@ def recorded_baseline(
     layout.experiments.mkdir(parents=True)
     shutil.copytree(m10_baseline_run, layout.baseline_run)
     stage = next(s for s in build_stages(layout, parameters) if s.name == "baseline")
-    write_stage_record(
-        build_stage_record(
-            stage_name=stage.name,
-            stage_kind=stage.kind,
-            command=stage.command,
-            logical_identity=run_identity(layout.baseline_run),
-            targets=list(stage.recorded_targets),
-            root=layout.root,
-        ),
+    record, integrity = build_stage_record(
+        stage_name=stage.name,
+        stage_kind=stage.kind,
+        command=stage.command,
+        logical_identity=run_identity(layout.baseline_run),
+        targets=list(stage.recorded_targets),
+        root=layout.root,
+    )
+    write_stage_record(record, stage.record)
+    write_integrity_sidecar(
         stage.record,
+        integrity,
+        describes=f"mlops/stages/{stage.name}.json",
+        produced_by=f"engagevr stage-record --stage {stage.name}",
+        paths_relative_to="the pipeline root",
     )
     return layout, parameters, stage
 
@@ -276,7 +321,7 @@ class TestByteIdenticalOutputs:
                 logical_identity=run_identity(layout.baseline_run),
                 targets=list(stage.recorded_targets),
                 root=layout.root,
-            ),
+            )[0],
             stage.record,
         )
         assert stage.record.read_bytes() == first
@@ -300,7 +345,7 @@ class TestByteIdenticalOutputs:
                 logical_identity=run_identity(layout.baseline_run),
                 targets=list(stage.recorded_targets),
                 root=layout.root,
-            ),
+            )[0],
             stage.record,
         )
         assert stage.record.read_bytes() == first
@@ -436,7 +481,7 @@ class TestMlflowIsOutsideDeterministicIdentity:
                 logical_identity=run_identity(layout.baseline_run),
                 targets=list(stage.recorded_targets),
                 root=layout.root,
-            ),
+            )[0],
             stage.record,
         )
         assert stage.record.read_bytes() == before
@@ -492,9 +537,11 @@ class TestTheSplit:
         # fails loudly rather than the guarantee weakening silently.
         target = tmp_path / "novel.json"
         target.write_text("{}", encoding="utf-8")
-        deterministic, volatile = classify([target], tmp_path)
-        assert [a.path for a in deterministic] == ["novel.json"]
-        assert volatile == {}
+        classification = classify([target], tmp_path)
+        assert [a.path for a in classification.deterministic] == ["novel.json"]
+        assert classification.volatile == {}
+        assert classification.execution_specific == {}
+        assert classification.integrity == ()
 
     def test_a_stage_that_produced_nothing_is_refused(self, tmp_path: Path) -> None:
         with pytest.raises(StageRecordError, match="produced no file"):
@@ -584,3 +631,405 @@ class TestPythonSeries:
         # every deterministic document.
         version = build_model_versions(m10_baseline_run, config=load_config())[0]
         assert version.python_series.count(".") == 1
+
+
+# ---------------------------------------------------------------------------
+# DEC-105: the corrected reproducibility boundary
+#
+# The regression coverage for the defect GitHub Actions found. Every test
+# here would have failed on the code that produced the failing CI run.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def model_versions_with_integrity(
+    tmp_path_factory: pytest.TempPathFactory, m10_baseline_run: Path
+) -> tuple[Path, Any, Any]:
+    """A written model-version directory and its integrity sidecar."""
+    directory = tmp_path_factory.mktemp("dec105") / "model_versions"
+    versions = build_model_versions(m10_baseline_run, config=load_config())
+    integrity = build_model_artifact_integrity(versions, m10_baseline_run)
+    write_model_versions(versions, directory, integrity=integrity)
+    return directory, versions, integrity
+
+
+class TestSerializedEstimatorsAreNotPortableIdentity:
+    """A ``.joblib`` checksum may not enter any DVC-declared document."""
+
+    def test_a_model_file_is_classified_execution_specific(
+        self, recorded_baseline: tuple[Path, Any, Any]
+    ) -> None:
+        _layout, _parameters, stage = recorded_baseline
+        record = read_stage_record(stage.record)
+        models = [
+            path
+            for path in record.execution_specific_artifacts
+            if path.endswith(".joblib")
+        ]
+        assert models, "the baseline run persists estimators; none was classified"
+        for path in models:
+            reason = record.execution_specific_artifacts[path]
+            assert "never-initialised padding" in reason
+            assert "serialized Python estimator" in reason
+
+    def test_no_portable_stage_record_checksums_a_model_file(
+        self, recorded_baseline: tuple[Path, Any, Any]
+    ) -> None:
+        _layout, _parameters, stage = recorded_baseline
+        record = read_stage_record(stage.record)
+        offending = [
+            a.path
+            for a in record.deterministic_artifacts
+            if is_serialized_estimator(a.path)
+        ]
+        assert offending == []
+
+    @pytest.mark.parametrize("suffix", SERIALIZED_ESTIMATOR_SUFFIXES)
+    def test_every_pickle_suffix_is_recognised(self, suffix: str) -> None:
+        assert is_serialized_estimator(f"experiments/run/models/estimator{suffix}")
+        assert is_execution_specific(f"experiments/run/models/estimator{suffix}")
+
+    def test_the_schema_refuses_a_model_checksum_in_a_portable_record(self) -> None:
+        # The last line of defence: even if classification were bypassed,
+        # the document cannot be constructed. CI fails if somebody
+        # reintroduces a raw serialized-model checksum into portable
+        # identity.
+        with pytest.raises(ValueError, match="serialized Python estimator"):
+            DeterministicStageRecord(
+                stage_name="baseline",
+                stage_kind="experiment_run",
+                command="c",
+                logical_identity="run_id:x",
+                deterministic_artifacts=(
+                    DeterministicArtifact(
+                        path="experiments/baseline/models/rf-fold0.joblib",
+                        sha256="a" * 64,
+                        size_bytes=1,
+                    ),
+                ),
+                engagevr_version="0.1.0",
+                python_series="3.12",
+                is_synthetic=True,
+                scientific_evaluation_eligible=False,
+                disclaimers=(SOFTWARE_SELF_CHECK_BANNER,),
+            )
+
+    def test_a_file_cannot_be_both_deterministic_and_execution_specific(self) -> None:
+        with pytest.raises(ValueError, match="exactly one classification"):
+            DeterministicStageRecord(
+                stage_name="baseline",
+                stage_kind="experiment_run",
+                command="c",
+                logical_identity="run_id:x",
+                deterministic_artifacts=(
+                    DeterministicArtifact(
+                        path="experiments/baseline/metrics.json",
+                        sha256="a" * 64,
+                        size_bytes=1,
+                    ),
+                ),
+                execution_specific_artifacts={
+                    "experiments/baseline/metrics.json": "why",
+                },
+                engagevr_version="0.1.0",
+                python_series="3.12",
+                is_synthetic=True,
+                scientific_evaluation_eligible=False,
+                disclaimers=(SOFTWARE_SELF_CHECK_BANNER,),
+            )
+
+    def test_classification_still_fails_closed_for_an_unknown_binary(
+        self, tmp_path: Path
+    ) -> None:
+        # An unknown suffix is NOT quietly excluded. It is checksummed, so
+        # a genuinely unstable new output breaks the reproduction test
+        # loudly instead of joining an exclusion list nobody reviewed.
+        target = tmp_path / "models" / "estimator.onnx"
+        target.parent.mkdir()
+        target.write_bytes(b"\x00\x01")
+        classification = classify([target], tmp_path)
+        assert [a.path for a in classification.deterministic] == [
+            "models/estimator.onnx"
+        ]
+        assert classification.execution_specific == {}
+
+
+class TestModelArtifactIntegrityIsPreserved:
+    """The digest moved. It was not weakened and it was not lost."""
+
+    def test_every_model_file_still_has_a_recorded_sha256(
+        self, model_versions_with_integrity: tuple[Path, Any, Any]
+    ) -> None:
+        directory, versions, _integrity = model_versions_with_integrity
+        record = read_artifact_integrity(integrity_sidecar_path(directory))
+        recorded = {entry.path for entry in record.artifacts}
+        assert recorded == {v.model_artifact_path for v in versions}
+        for entry in record.artifacts:
+            assert len(entry.sha256) == 64
+            assert entry.size_bytes > 0
+            assert entry.excluded_from_portable_identity
+
+    def test_the_stage_record_sidecar_holds_the_same_digests(
+        self, recorded_baseline: tuple[Path, Any, Any]
+    ) -> None:
+        layout, _parameters, stage = recorded_baseline
+        record = read_stage_record(stage.record)
+        integrity = ArtifactIntegrityRecord.model_validate(
+            json.loads(integrity_sidecar_path(stage.record).read_text(encoding="utf-8"))
+        )
+        assert {e.path for e in integrity.artifacts} == set(
+            record.execution_specific_artifacts
+        )
+        for entry in integrity.artifacts:
+            assert entry.sha256 == _sha256(layout.root / entry.path)
+
+    def test_changing_the_model_binary_changes_its_integrity_record(
+        self, tmp_path: Path, m10_baseline_run: Path
+    ) -> None:
+        import shutil
+
+        run = tmp_path / "run"
+        shutil.copytree(m10_baseline_run, run)
+        versions = build_model_versions(run, config=load_config())
+        before = build_model_artifact_integrity(versions, run)
+        target = run / versions[0].model_artifact_path
+        target.write_bytes(target.read_bytes() + b"\x00")
+        after = build_model_artifact_integrity(versions, run)
+        changed = [
+            (b.path, b.sha256, a.sha256)
+            for b, a in zip(before, after, strict=True)
+            if b.sha256 != a.sha256
+        ]
+        assert len(changed) == 1
+        assert changed[0][0] == versions[0].model_artifact_path
+
+    def test_a_tampered_model_binary_still_fails_verification(
+        self, tmp_path: Path, m10_baseline_run: Path
+    ) -> None:
+        import shutil
+
+        run = tmp_path / "run"
+        shutil.copytree(m10_baseline_run, run)
+        versions = build_model_versions(run, config=load_config())
+        integrity = build_model_artifact_integrity(versions, run)
+        assert (
+            verify_model_version(versions[0], run_directory=run, integrity=integrity)
+            == ()
+        )
+        target = run / versions[0].model_artifact_path
+        target.write_bytes(target.read_bytes() + b"\x00")
+        assert verify_model_version(
+            versions[0], run_directory=run, integrity=integrity
+        ) == (versions[0].model_artifact_path,)
+
+    def test_no_integrity_sidecar_is_a_declared_output(self) -> None:
+        for path in declared_outputs():
+            assert not path.endswith(INTEGRITY_SUFFIX)
+
+    def test_no_model_digest_appears_in_the_portable_stage_record(
+        self, recorded_baseline: tuple[Path, Any, Any]
+    ) -> None:
+        # The precise regression: a platform-sensitive binary hash must not
+        # appear anywhere in the DVC-declared document, in any field.
+        layout, _parameters, stage = recorded_baseline
+        rendered = stage.record.read_text(encoding="utf-8")
+        record = read_stage_record(stage.record)
+        assert record.execution_specific_artifacts
+        for relative in record.execution_specific_artifacts:
+            assert _sha256(layout.root / relative) not in rendered, relative
+
+    def test_the_integrity_sidecar_sits_outside_the_directory_it_describes(
+        self, model_versions_with_integrity: tuple[Path, Any, Any]
+    ) -> None:
+        directory, _versions, _integrity = model_versions_with_integrity
+        sidecar = integrity_sidecar_path(directory)
+        assert sidecar.is_file()
+        assert directory not in sidecar.parents
+
+    def test_the_integrity_record_says_a_checksum_is_not_validity(
+        self, model_versions_with_integrity: tuple[Path, Any, Any]
+    ) -> None:
+        directory, _versions, _integrity = model_versions_with_integrity
+        record = read_artifact_integrity(integrity_sidecar_path(directory))
+        assert "NOT SCIENTIFIC VALIDITY" in record.integrity_note.upper()
+        assert record.scientific_evaluation_eligible is False
+        assert record.is_synthetic is True
+
+
+class TestLogicalModelVersionIdentity:
+    """One logical version, N serialized instances."""
+
+    def test_the_identifier_does_not_depend_on_the_serialized_bytes(
+        self, tmp_path: Path, m10_baseline_run: Path
+    ) -> None:
+        # The exact defect: on the old code, appending a byte to a model
+        # file renamed the model version. It must not now.
+        import shutil
+
+        run = tmp_path / "run"
+        shutil.copytree(m10_baseline_run, run)
+        before = _identifiers(run)
+        target = run / "models" / "logistic_regression-fold0.joblib"
+        target.write_bytes(target.read_bytes() + b"\x00")
+        # checksums.json still records the old digest, so re-derivation
+        # refuses: tamper detection is intact. Update it the way a genuine
+        # re-serialization would, then re-derive.
+        checksums_path = run / "checksums.json"
+        checksums = json.loads(checksums_path.read_text(encoding="utf-8"))
+        checksums["models/logistic_regression-fold0.joblib"] = _sha256(target)
+        checksums_path.write_text(json.dumps(checksums), encoding="utf-8")
+        after = _identifiers(run)
+        assert after == before
+
+    def test_a_changed_estimator_configuration_changes_the_identifier(
+        self, tmp_path: Path, m10_baseline_run: Path
+    ) -> None:
+        import shutil
+
+        run = tmp_path / "run"
+        shutil.copytree(m10_baseline_run, run)
+        before = {
+            v.model_name: v.model_version_id
+            for v in build_model_versions(run, config=load_config())
+        }
+        path = run / "manifest.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["model_parameters"]["logistic_regression"]["parameters"]["C"] = 0.5
+        path.write_text(json.dumps(document), encoding="utf-8")
+        after = {
+            v.model_name: v.model_version_id
+            for v in build_model_versions(run, config=load_config())
+        }
+        assert after["logistic_regression-fold0"] != before["logistic_regression-fold0"]
+        assert after["dummy-fold0"] == before["dummy-fold0"]
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("run_id", "a-different-run"),
+            ("dataset_fingerprint", "f" * 64),
+            ("target_name", "engagement_score"),
+            ("task_type", "regression"),
+        ],
+    )
+    def test_changed_provenance_changes_the_identifier(
+        self, tmp_path: Path, m10_baseline_run: Path, field: str, value: str
+    ) -> None:
+        import shutil
+
+        run = tmp_path / "run"
+        shutil.copytree(m10_baseline_run, run)
+        before = _identifiers(run)
+        path = run / "manifest.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document[field] = value
+        path.write_text(json.dumps(document), encoding="utf-8")
+        after = _identifiers(run)
+        assert after != before
+
+    def test_a_changed_split_changes_the_identifier(
+        self, tmp_path: Path, m10_baseline_run: Path
+    ) -> None:
+        import shutil
+
+        run = tmp_path / "run"
+        shutil.copytree(m10_baseline_run, run)
+        before = _identifiers(run)
+        path = run / "splits.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        # Move one subject from training to test in the first fold: a real
+        # change to the split design, not a cosmetic edit to the document.
+        fold = document["folds"][0]
+        fold["test_groups"].append(fold["train_groups"].pop())
+        path.write_text(json.dumps(document), encoding="utf-8")
+        after = _identifiers(run)
+        assert after != before
+
+    def test_the_manifest_carries_no_serialized_artifact_checksum(
+        self, model_versions_with_integrity: tuple[Path, Any, Any]
+    ) -> None:
+        directory, _versions, _integrity = model_versions_with_integrity
+        for path in sorted(directory.glob("*.model-version.json")):
+            document = json.loads(path.read_text(encoding="utf-8"))
+            assert "model_artifact_sha256" not in document
+            assert not any(
+                is_serialized_estimator(name)
+                for name in document["referenced_checksums"]
+            )
+
+    def test_the_manifest_still_points_at_its_artifact_and_its_integrity_record(
+        self, model_versions_with_integrity: tuple[Path, Any, Any]
+    ) -> None:
+        directory, versions, _integrity = model_versions_with_integrity
+        sidecar = integrity_sidecar_path(directory)
+        for version in versions:
+            assert version.model_artifact_path.startswith("models/")
+            assert version.model_artifact_integrity_document == sidecar.name
+
+    def test_the_model_version_directory_carries_no_platform_hash(
+        self, model_versions_with_integrity: tuple[Path, Any, Any]
+    ) -> None:
+        # What CI actually reported: the whole directory's hash moved.
+        # Nothing inside it may now be a fact about one machine.
+        directory, _versions, integrity = model_versions_with_integrity
+        digests = {entry.sha256 for entry in integrity}
+        assert digests
+        for path in sorted(directory.glob("*.json")):
+            rendered = path.read_text(encoding="utf-8")
+            for digest in digests:
+                assert digest not in rendered, path.name
+
+    def test_no_model_version_becomes_an_endorsement(
+        self, model_versions_with_integrity: tuple[Path, Any, Any]
+    ) -> None:
+        directory, versions, _integrity = model_versions_with_integrity
+        del directory
+        for version in versions:
+            assert version.scientific_evaluation_eligible is False
+            assert version.is_synthetic is True
+            for word in ("production", "champion", "approved", "validated"):
+                assert word not in version.model_version_id.lower()
+
+
+class TestNothingRewritesTheLock:
+    """`dvc.lock` is generated. No formatter may edit it."""
+
+    def test_the_lock_wraps_commands_with_trailing_whitespace(self) -> None:
+        # Not a defect to fix: DVC writes it, and the point of the two
+        # tests here is that nothing else may take it away.
+        lock = (ROOT / "dvc.lock").read_text(encoding="utf-8")
+        assert any(line.endswith(" ") for line in lock.splitlines())
+
+    @pytest.mark.parametrize("hook", ["trailing-whitespace", "end-of-file-fixer"])
+    def test_the_whitespace_hooks_exclude_the_lock(self, hook: str) -> None:
+        # A hook that strips those trailing spaces makes the committed lock
+        # differ from the one `dvc repro` produces, so CI fails its
+        # cross-environment lock check on an edit nobody made deliberately.
+        document = yaml.safe_load(
+            (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+        )
+        entries = [
+            entry
+            for repo in document["repos"]
+            for entry in repo["hooks"]
+            if entry["id"] == hook
+        ]
+        assert entries, f"{hook} is no longer configured"
+        for entry in entries:
+            pattern = entry.get("exclude")
+            assert pattern, f"{hook} does not exclude anything"
+            assert re.search(pattern, "dvc.lock"), hook
+
+
+def _identifiers(run: Path) -> list[str]:
+    """Every logical model-version identifier a run yields, in order."""
+    return [
+        version.model_version_id
+        for version in build_model_versions(run, config=load_config())
+    ]
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()

@@ -20,6 +20,12 @@ paths, temporary directories, the contents of timestamped run manifests,
 MLflow run and experiment identifiers, the host platform, and the process
 identifier.
 
+Nor the SHA-256 of any serialized estimator.  A ``.joblib`` embeds
+uninitialised struct padding and the library build that wrote it, so its
+digest identifies one execution rather than the experiment; it is
+recorded in an artifact-integrity execution sidecar instead.  See
+DEC-105 and :mod:`engagevr.mlops.stage_record`.
+
 When the manifest was built is recorded in
 ``reproducibility.execution.json`` beside it, which is never a DVC output.
 """
@@ -146,19 +152,21 @@ def build_stage_entries(
                     command=record.command,
                     logical_identity=record.logical_identity,
                     deterministic_artifacts=record.deterministic_artifacts,
+                    execution_specific_artifacts=record.execution_specific_artifacts,
                     volatile_artifacts=record.volatile_artifacts,
                 )
             )
             continue
-        deterministic, volatile = classify(list(stage.outputs), layout.root)
+        classification = classify(list(stage.outputs), layout.root)
         entries.append(
             ReproducibilityStage(
                 name=stage.name,
                 kind=stage.kind,
                 command=stage.command,
                 logical_identity=_direct_identity(stage, layout),
-                deterministic_artifacts=deterministic,
-                volatile_artifacts=volatile,
+                deterministic_artifacts=classification.deterministic,
+                execution_specific_artifacts=classification.execution_specific,
+                volatile_artifacts=classification.volatile,
             )
         )
     return tuple(entries)

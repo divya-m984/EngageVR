@@ -345,7 +345,10 @@ def _layout_and_parameters(args: argparse.Namespace, config: EngageVRConfig):  #
 
 def run_stage_record(args: argparse.Namespace) -> int:
     """Write one stage's deterministic, DVC-declared representation."""
-    from engagevr.mlops.execution import write_execution_sidecar
+    from engagevr.mlops.execution import (
+        write_execution_sidecar,
+        write_integrity_sidecar,
+    )
     from engagevr.mlops.fingerprints import repository_relative
     from engagevr.mlops.pipeline import build_stages
     from engagevr.mlops.stage_record import (
@@ -379,7 +382,7 @@ def run_stage_record(args: argparse.Namespace) -> int:
             identity = run_identity(stage.recorded_targets[0])
         else:  # pragma: no cover - only two kinds carry a record today
             identity = f"stage:{stage.name}"
-        record = build_stage_record(
+        record, integrity = build_stage_record(
             stage_name=stage.name,
             stage_kind=stage.kind,
             command=stage.command,
@@ -398,11 +401,23 @@ def run_stage_record(args: argparse.Namespace) -> int:
         describes=repository_relative(output),
         produced_by=f"engagevr stage-record --stage {stage.name}",
     )
+    integrity_path = write_integrity_sidecar(
+        output,
+        integrity,
+        describes=repository_relative(output),
+        produced_by=f"engagevr stage-record --stage {stage.name}",
+        paths_relative_to="the pipeline root",
+    )
 
     print(f"Stage:                  {record.stage_name} ({record.stage_kind})")
     print(f"Logical identity:       {record.logical_identity}")
-    print(f"Deterministic artifacts:{len(record.deterministic_artifacts):>4}")
-    print(f"Volatile artifacts:     {len(record.volatile_artifacts):>4}")
+    print(f"Portable deterministic: {len(record.deterministic_artifacts):>4}")
+    print(f"Execution-specific:     {len(record.execution_specific_artifacts):>4}")
+    for path in record.execution_specific_artifacts:
+        print(f"  {path}")
+    if record.execution_specific_artifacts:
+        print(f"      digests recorded in {integrity_path.name}, not in the lock.")
+    print(f"Volatile provenance:    {len(record.volatile_artifacts):>4}")
     for path, reason in record.volatile_artifacts.items():
         print(f"  {path}")
         print(f"      not checksummed: {reason.split('.')[0]}.")
@@ -515,8 +530,10 @@ def run_mlops_demo(args: argparse.Namespace) -> int:
 
 def run_model_manifest(args: argparse.Namespace) -> int:
     """Derive and write immutable model-version records."""
+    from engagevr.mlops.execution import integrity_sidecar_path
     from engagevr.mlops.model_version import (
         ModelVersionError,
+        build_model_artifact_integrity,
         build_model_versions,
         summarise,
         verify_model_version,
@@ -536,13 +553,16 @@ def run_model_manifest(args: argparse.Namespace) -> int:
         versions = build_model_versions(
             run_directory, config=_config(), model_names=names
         )
+        integrity = build_model_artifact_integrity(versions, run_directory)
     except ModelVersionError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     if args.verify:
         for version in versions:
-            mismatched = verify_model_version(version, run_directory=run_directory)
+            mismatched = verify_model_version(
+                version, run_directory=run_directory, integrity=integrity
+            )
             if mismatched:
                 print(
                     f"Error: {version.model_version_id} references artifacts "
@@ -551,7 +571,7 @@ def run_model_manifest(args: argparse.Namespace) -> int:
                 )
                 return 1
 
-    written = write_model_versions(versions, Path(args.output))
+    written = write_model_versions(versions, Path(args.output), integrity=integrity)
     print(_MLOPS_BANNER)
     print()
     print(f"Source run:             {run_directory}")
@@ -562,9 +582,21 @@ def run_model_manifest(args: argparse.Namespace) -> int:
     print(f"Feature schema:         {versions[0].feature_schema_fingerprint}")
     print(f"Config fingerprint:     {versions[0].configuration.config_fingerprint}")
     print(f"Versions written:       {len(written)} -> {Path(args.output)}")
+    print(
+        f"Artifact integrity:     {len(integrity)} model checksums -> "
+        f"{integrity_sidecar_path(Path(args.output)).name}"
+    )
     print()
     for version in versions:
         print(f"  {summarise(version)}")
+    print()
+    print(
+        "A model version identifies the LOGICAL model — its run, estimator, "
+        "hyperparameters, data, split, features, and configuration. The "
+        "serialized .joblib's SHA-256 is recorded separately, because pickled "
+        "estimator bytes are not portable between execution environments "
+        "(DEC-105). One logical version, N serialized instances."
+    )
     print()
     print(versions[0].limitation)
     print(

@@ -260,23 +260,39 @@ def _check_artifact_integrity(context: _Context) -> SmokeCheckResult:
 
 
 def _check_model_version(context: _Context) -> SmokeCheckResult:
+    from engagevr.mlops.execution import integrity_sidecar_path
     from engagevr.mlops.model_version import (
+        build_model_artifact_integrity,
         build_model_versions,
+        read_artifact_integrity,
         read_model_version,
         verify_model_version,
         write_model_versions,
     )
 
     versions = build_model_versions(context.run_directory, config=context.config)
+    integrity = build_model_artifact_integrity(versions, context.run_directory)
     directory = context.directory / "model_versions"
-    written = write_model_versions(versions, directory)
+    written = write_model_versions(versions, directory, integrity=integrity)
     reread = read_model_version(written[0])
     if reread.model_version_id != versions[0].model_version_id:
         return _failed(
             "model_version_manifest_validated",
             "a written model version did not read back identically",
         )
-    mismatched = verify_model_version(reread, run_directory=context.run_directory)
+    # The model checksums are read back from the sidecar rather than from
+    # `integrity`, so this also proves the digests actually reached disk
+    # outside the DVC-declared directory. See DEC-105.
+    record = read_artifact_integrity(integrity_sidecar_path(directory))
+    if not record.artifacts:
+        return _failed(
+            "model_version_manifest_validated",
+            "no serialized-estimator checksum was recorded; artifact integrity "
+            "must not be lost when it leaves the portable identity",
+        )
+    mismatched = verify_model_version(
+        reread, run_directory=context.run_directory, integrity=record
+    )
     if mismatched:
         return _failed(
             "model_version_manifest_validated",
@@ -289,8 +305,9 @@ def _check_model_version(context: _Context) -> SmokeCheckResult:
         )
     return _passed(
         "model_version_manifest_validated",
-        f"{len(versions)} immutable, checksum-linked version(s); "
-        f"first is {versions[0].model_version_id}",
+        f"{len(versions)} immutable version(s) with logical identity; "
+        f"{len(record.artifacts)} serialized-artifact checksum(s) recorded "
+        f"outside the portable record; first is {versions[0].model_version_id}",
     )
 
 

@@ -113,9 +113,44 @@ DETERMINISTIC_DOCUMENT_NOTE = (
     "locked dependencies, the effective configuration, the synthetic seed, "
     "and the pipeline parameters — and of nothing else. It carries no "
     "wall-clock time, no absolute path, no temporary directory, no process "
-    "identifier, and no MLflow run identifier. When it was produced is "
-    "recorded beside it, in a .execution.json sidecar that is never a "
-    "DVC-declared output."
+    "identifier, no MLflow run identifier, and no checksum of a serialized "
+    "estimator. When it was produced is recorded beside it, in a "
+    ".execution.json sidecar that is never a DVC-declared output."
+)
+
+#: Why a serialized estimator's checksum is not a portable identity.
+#:
+#: Measured, not assumed.  ``sklearn.tree._tree.Tree.__getstate__`` returns
+#: the raw ``nodes`` buffer, whose C struct carries seven bytes of padding
+#: per node that nothing ever initialises, and ``joblib.dump`` writes that
+#: buffer verbatim.  In this repository's own baseline run each
+#: random-forest artifact contains 112,826 such bytes, about ten thousand
+#: of them non-zero heap residue — and 191 of the 200 trees that are
+#: byte-identical in their *declared fields* between the plain and the
+#: calibrated artifact disagree in that padding.  Two serializations of one
+#: model, in one process, already differ.
+#:
+#: So a ``.joblib`` digest is a fact about one execution's heap, not about
+#: the experiment.  It is still recorded — tamper detection needs it — but
+#: in an execution-specific integrity record, never in a portable identity.
+EXECUTION_SPECIFIC_NOTE = (
+    "EXECUTION-SPECIFIC ARTIFACT. Its bytes are not a pure function of the "
+    "pipeline's inputs, so its checksum is not part of any portable "
+    "identity. A serialized Python estimator (.joblib, .pkl) embeds "
+    "uninitialised C struct padding and reflects the interpreter, the "
+    "library build, and the CPU that produced it. The artifact is still "
+    "created, still checksummed, and still tamper-checked — in an "
+    "<name>.artifact-integrity.execution.json record beside the "
+    "deterministic document, which is never a DVC-declared output."
+)
+
+#: Repeated on every artifact-integrity record.
+ARTIFACT_INTEGRITY_NOTE = (
+    "ARTIFACT INTEGRITY IS NOT SCIENTIFIC VALIDITY. A matching SHA-256 "
+    "means the bytes on disk are the bytes that were written. It says "
+    "nothing about whether the estimator is correct, useful, or evaluated "
+    "against any participant-provided label, and a mismatch between two "
+    "execution environments is expected rather than alarming."
 )
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -175,6 +210,24 @@ def python_series(version: str) -> str:
     if len(parts) < 2:
         raise ValueError(f"cannot derive a Python series from {version!r}")
     return f"{parts[0]}.{parts[1]}"
+
+
+#: Suffixes of a serialized Python estimator, whose bytes are execution-specific.
+#:
+#: Held here rather than in the producing module because this is the layer
+#: that *refuses* them: a schema that can reject the mistake is worth more
+#: than a convention that documents it.
+SERIALIZED_ESTIMATOR_SUFFIXES: tuple[str, ...] = (".joblib", ".pkl", ".pickle")
+
+
+def is_serialized_estimator(path: str) -> bool:
+    """Whether a path names a pickled estimator.
+
+    See :data:`EXECUTION_SPECIFIC_NOTE` for why the answer matters: such a
+    file may be produced, kept, and checksummed, but its digest may never
+    be part of a portable deterministic identity.
+    """
+    return path.lower().endswith(SERIALIZED_ESTIMATOR_SUFFIXES)
 
 
 def assert_supported_schema_version(value: str) -> str:
@@ -274,6 +327,102 @@ class ExecutionMetadata(_VersionedDocument):
         return self
 
 
+class ArtifactIntegrityEntry(BaseModel):
+    """One concrete generated file, and the bytes it actually has."""
+
+    model_config = {"extra": "forbid"}
+
+    path: str = Field(
+        description="Relative path, resolved against the record's "
+        "`paths_relative_to` field. Never absolute."
+    )
+    sha256: str = Field(min_length=64, max_length=64)
+    size_bytes: int = Field(ge=0)
+    excluded_from_portable_identity: str = Field(
+        min_length=1,
+        description="Why this digest is not part of any portable identity.",
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        assert_relative_path(self.path, field="path")
+        if not _SHA256.match(self.sha256):
+            raise ValueError("sha256 must be a lowercase SHA-256 digest")
+        return self
+
+
+class ArtifactIntegrityRecord(_VersionedDocument):
+    """The real checksums of the files a portable record cannot carry.
+
+    The other half of the correction in DEC-105.  A serialized estimator's
+    digest is genuine and worth keeping — it is how anybody detects that a
+    model file changed after it was written — but it describes *one
+    execution on one machine*, so it cannot live inside a DVC-declared
+    document without making a correct reproduction elsewhere look like a
+    changed pipeline.
+
+    So it lives here, in ``<name>.artifact-integrity.execution.json``
+    beside the deterministic document, which is **never a DVC-declared
+    output**.  Nothing is weakened: every generated model file still has a
+    recorded SHA-256, and changing one still changes this record.
+
+    The environment fields exist because they are the explanation.  Two of
+    these records disagreeing is expected when the Python build, the
+    library build, or the CPU differs; that is a fact about pickles, not a
+    finding about the experiment.
+    """
+
+    describes: str = Field(
+        description="The deterministic document this belongs to, relative to "
+        "the pipeline root."
+    )
+    produced_by: str = Field(min_length=1)
+    created_at_utc: datetime
+
+    paths_relative_to: str = Field(
+        description=(
+            "What every artifact path is resolved against — the pipeline root "
+            "for a stage record, the producing run directory for a model "
+            "version. Stated rather than assumed: two records with different "
+            "bases and no field saying so is a trap for whoever verifies them."
+        )
+    )
+    artifacts: tuple[ArtifactIntegrityEntry, ...] = ()
+
+    engagevr_version: str
+    python_version: str = Field(description="Full interpreter version.")
+    python_implementation: str
+    platform: str = Field(description="Host platform string of the execution.")
+    dependency_versions: dict[str, str] = Field(default_factory=dict)
+
+    is_synthetic: bool = True
+    scientific_evaluation_eligible: bool = False
+    integrity_note: str = ARTIFACT_INTEGRITY_NOTE
+    execution_specific_note: str = EXECUTION_SPECIFIC_NOTE
+    note: str = (
+        "VOLATILE EXECUTION RECORD. Never a DVC-declared output and never "
+        "part of a portable identity, fingerprint, or logical model version."
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        assert_relative_path(self.describes, field="describes")
+        if not self.paths_relative_to:
+            raise ValueError(
+                "paths_relative_to must name what the artifact paths resolve "
+                "against; a checksum nobody can locate verifies nothing"
+            )
+        paths = [artifact.path for artifact in self.artifacts]
+        if len(set(paths)) != len(paths):
+            raise ValueError("an artifact is listed more than once")
+        if self.scientific_evaluation_eligible:
+            raise ValueError(
+                "an artifact-integrity record can never be scientifically "
+                "eligible: a checksum is not an evaluation"
+            )
+        return self
+
+
 # ---------------------------------------------------------------------------
 # Deterministic pipeline records
 # ---------------------------------------------------------------------------
@@ -334,7 +483,25 @@ class DeterministicStageRecord(_VersionedDocument):
         ),
     )
 
-    deterministic_artifacts: tuple[DeterministicArtifact, ...] = ()
+    deterministic_artifacts: tuple[DeterministicArtifact, ...] = Field(
+        default=(),
+        description=(
+            "Files whose bytes are a pure function of the pipeline's inputs. "
+            "Only these are checksummed here, and only these reach dvc.lock."
+        ),
+    )
+    execution_specific_artifacts: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Path to the reason its bytes belong to one execution rather than "
+            "to the experiment — a serialized estimator, above all. Recorded "
+            "WITHOUT a checksum: the digest is real and is kept, but in the "
+            "<name>.artifact-integrity.execution.json record beside this "
+            "document, because a platform-sensitive digest inside a "
+            "DVC-declared output makes a fresh reproduction on a different "
+            "machine look like a changed pipeline."
+        ),
+    )
     volatile_artifacts: dict[str, str] = Field(
         default_factory=dict,
         description=(
@@ -351,6 +518,7 @@ class DeterministicStageRecord(_VersionedDocument):
     scientific_evaluation_eligible: bool
     disclaimers: tuple[str, ...]
     determinism_note: str = DETERMINISTIC_DOCUMENT_NOTE
+    execution_specific_note: str = EXECUTION_SPECIFIC_NOTE
     note: str = NO_INFLATION_NOTE
 
     @model_validator(mode="after")
@@ -359,21 +527,47 @@ class DeterministicStageRecord(_VersionedDocument):
         if self.stage_kind not in allowed:
             raise ValueError(f"stage_kind must be one of {sorted(allowed)}")
         assert_python_series(self.python_series, field="python_series")
-        for path, reason in self.volatile_artifacts.items():
-            assert_relative_path(path, field="volatile_artifacts")
-            if not reason:
-                raise ValueError(
-                    f"volatile artifact {path!r} must state why its bytes vary"
-                )
+        for field, mapping in (
+            ("volatile_artifacts", self.volatile_artifacts),
+            ("execution_specific_artifacts", self.execution_specific_artifacts),
+        ):
+            for path, reason in mapping.items():
+                assert_relative_path(path, field=field)
+                if not reason:
+                    raise ValueError(
+                        f"{field} entry {path!r} must state why it is excluded "
+                        "from the portable deterministic identity"
+                    )
         paths = [artifact.path for artifact in self.deterministic_artifacts]
         if len(set(paths)) != len(paths):
             raise ValueError("a deterministic artifact is listed more than once")
-        overlap = set(paths) & set(self.volatile_artifacts)
-        if overlap:
+        for label, other in (
+            ("volatile", set(self.volatile_artifacts)),
+            ("execution-specific", set(self.execution_specific_artifacts)),
+        ):
+            overlap = set(paths) & other
+            if overlap:
+                raise ValueError(
+                    f"{sorted(overlap)} are listed as both deterministic and "
+                    f"{label}; a file has exactly one classification"
+                )
+        both = set(self.volatile_artifacts) & set(self.execution_specific_artifacts)
+        if both:
             raise ValueError(
-                f"{sorted(overlap)} are listed as both deterministic and "
-                "volatile; a file is one or the other"
+                f"{sorted(both)} are listed as both volatile and "
+                "execution-specific; a file has exactly one classification"
             )
+        for artifact in self.deterministic_artifacts:
+            if is_serialized_estimator(artifact.path):
+                raise ValueError(
+                    f"{artifact.path!r} is a serialized Python estimator and "
+                    "was checksummed as portable deterministic identity. Its "
+                    "bytes embed uninitialised struct padding and the build "
+                    "that produced them, so a fresh reproduction on another "
+                    "machine would look like a changed pipeline. Classify it "
+                    "execution_specific and record its digest in the "
+                    "artifact-integrity sidecar."
+                )
         if not self.disclaimers:
             raise ValueError("a stage record must carry at least one disclaimer")
         if self.is_synthetic:
@@ -452,6 +646,22 @@ class ModelVersionManifest(_VersionedDocument):
     ``model_version_id`` is a deterministic function of that content, so
     re-deriving the manifest from the same run reproduces the identifier
     rather than minting a new one.
+
+    Logical identity, not serialized bytes
+    --------------------------------------
+    The identifier is **scientific and software provenance only**: the
+    source run, the target, the estimator and its hyperparameters, the
+    dataset, split, feature-schema and configuration fingerprints, and the
+    serializer kind.  It deliberately excludes the SHA-256 of the
+    ``.joblib``, because that digest is a fact about one execution's heap
+    and one machine's libraries (see :data:`EXECUTION_SPECIFIC_NOTE`), and
+    an identifier built on it renames the same model on every machine.
+
+    The relation is therefore one logical model version to N serialized
+    artifact instances.  Each instance's real digest is recorded in an
+    ``<name>.artifact-integrity.execution.json`` record beside this
+    directory — see :class:`ArtifactIntegrityRecord`.  Tamper detection is
+    unchanged; only its location is.
     """
 
     model_config = {"extra": "forbid", "protected_namespaces": ()}
@@ -459,11 +669,13 @@ class ModelVersionManifest(_VersionedDocument):
     model_version_id: str = Field(min_length=1)
     model_version_algorithm: str = "sha256"
     model_version_inputs: str = (
-        "source run id, target, task type, estimator type, model name, "
-        "dataset fingerprint, split fingerprint, feature-schema "
-        "fingerprint, configuration fingerprint, serialization format, "
-        "model-artifact SHA-256, and the EngageVR version. Excludes "
-        "creation time, absolute paths, and the MLflow run id."
+        "source run id, target, task type, estimator type, estimator class, "
+        "estimator hyperparameter fingerprint, model name, dataset "
+        "fingerprint, split fingerprint, feature-schema fingerprint, "
+        "configuration fingerprint, serialization format, and the EngageVR "
+        "version. Excludes creation time, absolute paths, the MLflow run id, "
+        "and the serialized artifact's SHA-256 — that digest belongs to one "
+        "execution, not to the model this identifier names."
     )
 
     target_name: str
@@ -501,6 +713,15 @@ class ModelVersionManifest(_VersionedDocument):
     dataset_fingerprint: str = Field(min_length=64, max_length=64)
     split_fingerprint: str = Field(min_length=64, max_length=64)
     feature_schema_fingerprint: str = Field(min_length=64, max_length=64)
+    estimator_parameters_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        description=(
+            "SHA-256 over the producing run's recorded hyperparameters for "
+            "this estimator. Changing an estimator's configuration changes "
+            "the logical model version even when nothing else moves."
+        ),
+    )
     feature_catalog_version: str
     feature_count: int = Field(ge=0)
 
@@ -519,11 +740,21 @@ class ModelVersionManifest(_VersionedDocument):
     model_artifact_path: str = Field(
         description="Path of the estimator file, relative to the run directory."
     )
-    model_artifact_sha256: str = Field(min_length=64, max_length=64)
-    model_artifact_bytes: int = Field(ge=0)
+    model_artifact_integrity_document: str = Field(
+        default="model_versions.artifact-integrity.execution.json",
+        description=(
+            "File name of the execution-specific record holding this "
+            "artifact's actual SHA-256 and size, written beside the model "
+            "version directory and never DVC-declared."
+        ),
+    )
     referenced_checksums: dict[str, str] = Field(
         default_factory=dict,
-        description="Recorded SHA-256 of the run documents this version depends on.",
+        description=(
+            "Recorded SHA-256 of the byte-stable run documents this version "
+            "depends on. The model file is deliberately absent: its digest is "
+            "execution-specific and lives in the integrity record."
+        ),
     )
 
     engagevr_version: str
@@ -546,6 +777,7 @@ class ModelVersionManifest(_VersionedDocument):
     created_by: str = "engagevr model-manifest"
     limitation: str = MODEL_VERSION_LIMITATION
     determinism_note: str = DETERMINISTIC_DOCUMENT_NOTE
+    execution_specific_note: str = EXECUTION_SPECIFIC_NOTE
     disclaimers: tuple[str, ...]
 
     @model_validator(mode="after")
@@ -563,10 +795,20 @@ class ModelVersionManifest(_VersionedDocument):
             ("dataset_fingerprint", self.dataset_fingerprint),
             ("split_fingerprint", self.split_fingerprint),
             ("feature_schema_fingerprint", self.feature_schema_fingerprint),
-            ("model_artifact_sha256", self.model_artifact_sha256),
+            ("estimator_parameters_fingerprint", self.estimator_parameters_fingerprint),
         ):
             if not _SHA256.match(digest):
                 raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+        offending = sorted(
+            name for name in self.referenced_checksums if is_serialized_estimator(name)
+        )
+        if offending:
+            raise ValueError(
+                f"{offending} are serialized estimators and were referenced by "
+                "checksum from a DVC-declared model version. Their digests are "
+                "execution-specific; record them in the artifact-integrity "
+                "sidecar instead."
+            )
         if not self.disclaimers:
             raise ValueError(
                 "a model-version manifest must carry at least one disclaimer"
@@ -614,6 +856,14 @@ class ReproducibilityStage(BaseModel):
         ),
     )
     deterministic_artifacts: tuple[DeterministicArtifact, ...] = ()
+    execution_specific_artifacts: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Path to the reason its bytes belong to one execution. Recorded "
+            "WITHOUT a checksum; the real digest is in the stage's "
+            "artifact-integrity record, which is never DVC-declared."
+        ),
+    )
     volatile_artifacts: dict[str, str] = Field(
         default_factory=dict,
         description=(
@@ -628,11 +878,22 @@ class ReproducibilityStage(BaseModel):
         allowed = {"dataset", "experiment_run", "diagnostic", "report"}
         if self.kind not in allowed:
             raise ValueError(f"stage kind must be one of {sorted(allowed)}")
-        for path, reason in self.volatile_artifacts.items():
-            assert_relative_path(path, field="volatile_artifacts")
-            if not reason:
+        for field, mapping in (
+            ("volatile_artifacts", self.volatile_artifacts),
+            ("execution_specific_artifacts", self.execution_specific_artifacts),
+        ):
+            for path, reason in mapping.items():
+                assert_relative_path(path, field=field)
+                if not reason:
+                    raise ValueError(
+                        f"{field} entry {path!r} must state why it is excluded "
+                        "from the portable deterministic identity"
+                    )
+        for artifact in self.deterministic_artifacts:
+            if is_serialized_estimator(artifact.path):
                 raise ValueError(
-                    f"volatile artifact {path!r} must state why its bytes vary"
+                    f"{artifact.path!r} is a serialized Python estimator and "
+                    "cannot be part of a portable deterministic identity"
                 )
         return self
 
@@ -672,6 +933,10 @@ class ReproducibilityManifest(_VersionedDocument):
         "absolute filesystem paths and temporary directories",
         "the timestamped provenance documents the Milestone 5-8 runners "
         "write, which are listed by path and reason but never checksummed",
+        "the SHA-256 of every serialized estimator (.joblib, .pkl), which "
+        "describes one execution's heap and libraries rather than the "
+        "experiment, and which is recorded in an artifact-integrity record "
+        "beside the pipeline instead",
         "MLflow run and experiment identifiers",
         "host platform, machine name, and process identifier",
     )
@@ -680,6 +945,7 @@ class ReproducibilityManifest(_VersionedDocument):
     scientific_evaluation_eligible: bool
     disclaimers: tuple[str, ...]
     determinism_note: str = DETERMINISTIC_DOCUMENT_NOTE
+    execution_specific_note: str = EXECUTION_SPECIFIC_NOTE
     note: str = NO_INFLATION_NOTE
 
     @model_validator(mode="after")

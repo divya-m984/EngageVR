@@ -445,13 +445,13 @@ source + config + synthetic generators
 |--------|---------------|
 | `schemas/mlops.py` | Every persisted M10 record, versioned and strict |
 | `mlops/fingerprints.py` | Canonical hashing for configuration, splits, feature schemas |
-| `mlops/model_version.py` | Immutable, checksum-linked model versions |
+| `mlops/model_version.py` | Immutable **logical** model versions, and the execution-specific integrity of each serialized instance |
 | `mlops/mlflow_tracking.py` | The only module that knows MLflow exists |
 | `mlops/drift.py` | Five interpretable distribution-shift diagnostics |
 | `mlops/pipeline.py` | Stage definitions shared by `dvc.yaml` and `mlops-demo` |
 | `mlops/reproducibility.py` | Logical identity across executions |
 | `mlops/stage_record.py` | The deterministic, DVC-declared representation of a stage |
-| `mlops/execution.py` | Volatile execution metadata, in a never-declared sidecar |
+| `mlops/execution.py` | Volatile execution metadata and artifact-integrity checksums, in never-declared sidecars |
 | `mlops/smoke.py` | The 13-check integrated software self-check |
 | `cli_milestone10.py` | `mlops-demo`, `model-manifest`, `drift-check`, `mlflow-log`, `repro-manifest`, `system-smoke` |
 
@@ -488,6 +488,28 @@ byte-stable files, so `dvc.lock` is byte-identical across fresh
 reproductions while a genuine change to a metric still propagates. When
 each Milestone 10 document was produced lives in a `.execution.json`
 sidecar that is never an output.
+
+**Portable logical reproducibility is separated from execution-specific
+artifact integrity** (DEC-105). Every generated file a stage produces gets
+one of three classifications:
+
+```
+portable_deterministic   checksummed in the stage record -> dvc.lock
+execution_specific       named with a reason; SHA-256 goes to
+                         <name>.artifact-integrity.execution.json
+volatile_provenance      named with a reason; never checksummed
+```
+
+A serialized estimator (`.joblib`, `.pkl`) is execution-specific: its bytes
+embed uninitialised C struct padding and the library build that wrote them,
+so its digest identifies one execution rather than the experiment. The
+schemas **refuse** to hold such a digest in portable identity. Consequently
+a model version identifies the *logical* model — run, estimator,
+hyperparameters, data, split, features, configuration — and one logical
+version may have N serialized instances. Artifact integrity is not
+weakened: every model file is still hashed, recorded, and tamper-checked,
+in a sidecar that is never a DVC output. An unclassified new output is
+still treated as portable deterministic, so it fails closed.
 
 ### 9. Cross-Cutting Concerns
 

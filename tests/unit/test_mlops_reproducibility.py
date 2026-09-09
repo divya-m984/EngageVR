@@ -58,17 +58,15 @@ def executed_pipeline(m10_baseline_run: Path, tmp_path: Path):  # type: ignore[n
     layout.experiments.mkdir(parents=True)
     shutil.copytree(m10_baseline_run, layout.baseline_run)
     stage = next(s for s in build_stages(layout, parameters) if s.name == "baseline")
-    write_stage_record(
-        build_stage_record(
-            stage_name=stage.name,
-            stage_kind=stage.kind,
-            command=stage.command,
-            logical_identity=run_identity(layout.baseline_run),
-            targets=list(stage.recorded_targets),
-            root=layout.root,
-        ),
-        stage.record,
+    record, _integrity = build_stage_record(
+        stage_name=stage.name,
+        stage_kind=stage.kind,
+        command=stage.command,
+        logical_identity=run_identity(layout.baseline_run),
+        targets=list(stage.recorded_targets),
+        root=layout.root,
     )
+    write_stage_record(record, stage.record)
     return layout, parameters, (stage,)
 
 
@@ -175,16 +173,27 @@ class TestStageEntries:
         for name in ("metrics.json", "splits.json"):
             assert any(path.endswith(f"/{name}") for path in paths), name
 
-    def test_model_binaries_are_checksummed(self, executed_pipeline) -> None:  # type: ignore[no-untyped-def]
+    def test_model_binaries_are_listed_execution_specific_not_checksummed(
+        self,
+        executed_pipeline,  # type: ignore[no-untyped-def]
+    ) -> None:
+        # DEC-105. A serialized estimator is named, with the reason it is
+        # excluded, and never carries a checksum inside a DVC-declared
+        # document: its bytes include uninitialised struct padding.
         layout, _parameters, stages = executed_pipeline
         entries = build_stage_entries(stages, layout)
         baseline = next(e for e in entries if e.name == "baseline")
-        joblibs = [
+        assert not [
             a for a in baseline.deterministic_artifacts if a.path.endswith(".joblib")
         ]
+        joblibs = [
+            path
+            for path in baseline.execution_specific_artifacts
+            if path.endswith(".joblib")
+        ]
         assert joblibs
-        for artifact in joblibs:
-            assert len(artifact.sha256) == 64
+        for path in joblibs:
+            assert baseline.execution_specific_artifacts[path]
 
     def test_paths_are_recorded_relative_to_the_pipeline_root(
         self, executed_pipeline
@@ -253,7 +262,7 @@ class TestLogicalFingerprint:
                 logical_identity=run_identity(layout.baseline_run),
                 targets=list(stage.recorded_targets),
                 root=layout.root,
-            ),
+            )[0],
             stage.record,
         )
         after = build_manifest(stages, layout, config=load_config())
@@ -277,7 +286,7 @@ class TestLogicalFingerprint:
                 logical_identity=run_identity(layout.baseline_run),
                 targets=list(stage.recorded_targets),
                 root=layout.root,
-            ),
+            )[0],
             stage.record,
         )
         after = build_manifest(stages, layout, config=load_config())

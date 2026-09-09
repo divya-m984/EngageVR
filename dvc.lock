@@ -23,8 +23,8 @@ stages:
       nfiles: 7
     - path: src/engagevr/mlops/stage_record.py
       hash: md5
-      md5: 0c75c30d5c4a383f87f4ebec6c69941b
-      size: 11070
+      md5: d77678d06becfae88b2b957969912a21
+      size: 16043
     - path: src/engagevr/schemas/features.py
       hash: md5
       md5: 027bc9c1fac88edb5fdf80e18a5365f6
@@ -49,8 +49,8 @@ stages:
       size: 300584
     - path: artifacts/pipeline/mlops/stages/dataset-reference.json
       hash: md5
-      md5: f94ee48ee080f7f8a9fadbcc316677af
-      size: 2827
+      md5: 975a47866e0c00baaf5e41f302b6c152
+      size: 3451
   dataset-current:
     cmd:
     - uv run python -m engagevr features-demo --seed 1337 --subjects 24 
@@ -74,8 +74,8 @@ stages:
       nfiles: 7
     - path: src/engagevr/mlops/stage_record.py
       hash: md5
-      md5: 0c75c30d5c4a383f87f4ebec6c69941b
-      size: 11070
+      md5: d77678d06becfae88b2b957969912a21
+      size: 16043
     - path: src/engagevr/schemas/features.py
       hash: md5
       md5: 027bc9c1fac88edb5fdf80e18a5365f6
@@ -100,8 +100,8 @@ stages:
       size: 299331
     - path: artifacts/pipeline/mlops/stages/dataset-current.json
       hash: md5
-      md5: 6ded1af222d3c802b2c7aba7b5c9ec4d
-      size: 2817
+      md5: 7c62ad4891ae094e92c89183a5096446
+      size: 3441
   baseline:
     cmd:
     - uv run python -m engagevr baseline-demo --dataset 
@@ -125,8 +125,8 @@ stages:
       size: 17813
     - path: src/engagevr/mlops/stage_record.py
       hash: md5
-      md5: 0c75c30d5c4a383f87f4ebec6c69941b
-      size: 11070
+      md5: d77678d06becfae88b2b957969912a21
+      size: 16043
     - path: src/engagevr/training
       hash: md5
       md5: 341324dc69ca023d4f75568a4f79b075.dir
@@ -140,8 +140,8 @@ stages:
     outs:
     - path: artifacts/pipeline/mlops/stages/baseline.json
       hash: md5
-      md5: 22e61e365faf16338e1d352f6d14db2b
-      size: 6651
+      md5: e6dc073a52cdb333e6f3a815fe0cd2be
+      size: 12051
   uncertainty:
     cmd:
     - uv run python -m engagevr uncertainty-demo --dataset 
@@ -165,8 +165,8 @@ stages:
       size: 22356
     - path: src/engagevr/mlops/stage_record.py
       hash: md5
-      md5: 0c75c30d5c4a383f87f4ebec6c69941b
-      size: 11070
+      md5: d77678d06becfae88b2b957969912a21
+      size: 16043
     - path: src/engagevr/training
       hash: md5
       md5: 341324dc69ca023d4f75568a4f79b075.dir
@@ -180,8 +180,8 @@ stages:
     outs:
     - path: artifacts/pipeline/mlops/stages/uncertainty.json
       hash: md5
-      md5: 0044357e8f5316144eb4dd37daffe5f5
-      size: 5517
+      md5: af942f14b591ca42df9013124c72d87f
+      size: 6141
   model-version:
     cmd: uv run python -m engagevr model-manifest --run 
       artifacts/pipeline/experiments/baseline-engagement_class --output 
@@ -189,25 +189,25 @@ stages:
     deps:
     - path: artifacts/pipeline/mlops/stages/baseline.json
       hash: md5
-      md5: 22e61e365faf16338e1d352f6d14db2b
-      size: 6651
+      md5: e6dc073a52cdb333e6f3a815fe0cd2be
+      size: 12051
     - path: configs/defaults.yaml
       hash: md5
       md5: d6d401a4fa5c4ac9e2ccaf0c2a44c0aa
       size: 27629
     - path: src/engagevr/mlops/model_version.py
       hash: md5
-      md5: fa057bc64588ef3894e2538c369d57df
-      size: 17419
+      md5: b448fb3105579ed5b92680f4022bb244
+      size: 24554
     - path: src/engagevr/schemas/mlops.py
       hash: md5
-      md5: 93b49ea5f77776819f466a6496a279af
-      size: 47820
+      md5: ed5cc8e4d3c3494067e5229034fa9a2f
+      size: 60456
     outs:
     - path: artifacts/pipeline/mlops/model_versions
       hash: md5
-      md5: 00c0660272510cc453602e32b1eb5b0b.dir
-      size: 122647
+      md5: 0502d82b0356437c26212572efbee2b3.dir
+      size: 129520
       nfiles: 10
   drift:
     cmd: uv run python -m engagevr drift-check --reference 
@@ -233,13 +233,13 @@ stages:
       size: 31765
     - path: src/engagevr/schemas/mlops.py
       hash: md5
-      md5: 93b49ea5f77776819f466a6496a279af
-      size: 47820
+      md5: ed5cc8e4d3c3494067e5229034fa9a2f
+      size: 60456
     outs:
     - path: artifacts/pipeline/mlops/drift_report.json
       hash: md5
-      md5: 260eb2d6c968ff97ffb067632c0cfbe2
-      size: 255358
+      md5: 70162d0add39aa0176efae2ba0551ffb
+      size: 255397
   integrity:
     cmd: uv run python -m engagevr dashboard-check --artifact-root 
       artifacts/pipeline/experiments --json > 
@@ -247,12 +247,12 @@ stages:
     deps:
     - path: artifacts/pipeline/mlops/stages/baseline.json
       hash: md5
-      md5: 22e61e365faf16338e1d352f6d14db2b
-      size: 6651
+      md5: e6dc073a52cdb333e6f3a815fe0cd2be
+      size: 12051
     - path: artifacts/pipeline/mlops/stages/uncertainty.json
       hash: md5
-      md5: 0044357e8f5316144eb4dd37daffe5f5
-      size: 5517
+      md5: af942f14b591ca42df9013124c72d87f
+      size: 6141
     - path: src/engagevr/cli_milestone9.py
       hash: md5
       md5: 92ac95f3c1a752f826682482fc9c9c74
@@ -277,29 +277,29 @@ stages:
       size: 1647
     - path: artifacts/pipeline/mlops/drift_report.json
       hash: md5
-      md5: 260eb2d6c968ff97ffb067632c0cfbe2
-      size: 255358
+      md5: 70162d0add39aa0176efae2ba0551ffb
+      size: 255397
     - path: artifacts/pipeline/mlops/model_versions
       hash: md5
-      md5: 00c0660272510cc453602e32b1eb5b0b.dir
-      size: 122647
+      md5: 0502d82b0356437c26212572efbee2b3.dir
+      size: 129520
       nfiles: 10
     - path: artifacts/pipeline/mlops/stages/baseline.json
       hash: md5
-      md5: 22e61e365faf16338e1d352f6d14db2b
-      size: 6651
+      md5: e6dc073a52cdb333e6f3a815fe0cd2be
+      size: 12051
     - path: artifacts/pipeline/mlops/stages/dataset-current.json
       hash: md5
-      md5: 6ded1af222d3c802b2c7aba7b5c9ec4d
-      size: 2817
+      md5: 7c62ad4891ae094e92c89183a5096446
+      size: 3441
     - path: artifacts/pipeline/mlops/stages/dataset-reference.json
       hash: md5
-      md5: f94ee48ee080f7f8a9fadbcc316677af
-      size: 2827
+      md5: 975a47866e0c00baaf5e41f302b6c152
+      size: 3451
     - path: artifacts/pipeline/mlops/stages/uncertainty.json
       hash: md5
-      md5: 0044357e8f5316144eb4dd37daffe5f5
-      size: 5517
+      md5: af942f14b591ca42df9013124c72d87f
+      size: 6141
     - path: params.yaml
       hash: md5
       md5: 191570919677eca85ee4bc2c8b70e4f6
@@ -310,10 +310,10 @@ stages:
       size: 17377
     - path: src/engagevr/mlops/reproducibility.py
       hash: md5
-      md5: b57e586f5c5d20fed693476730f6d2f1
-      size: 11123
+      md5: 76705fd58e0fc4da6c8599d3c64b7a2b
+      size: 11631
     outs:
     - path: artifacts/pipeline/mlops/reproducibility.json
       hash: md5
-      md5: b95d2a3815ac5678e7bc9a049edf2523
-      size: 26837
+      md5: e57dcf506a2163685d285d0637a05e63
+      size: 32564

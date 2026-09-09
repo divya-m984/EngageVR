@@ -5,13 +5,38 @@ What this is
 A *model version* here is a record, not a registry entry.  It answers
 three questions and refuses to answer a fourth:
 
-- **Where did this estimator come from?**  Source run id, dataset
-  fingerprint, split fingerprint, feature-schema fingerprint,
-  configuration fingerprint.
-- **Which bytes are it?**  SHA-256 of the ``.joblib`` file plus the
-  recorded checksums of the run documents it depends on.
+- **Where did this estimator come from?**  Source run id, estimator class
+  and hyperparameters, dataset fingerprint, split fingerprint,
+  feature-schema fingerprint, configuration fingerprint.
+- **Which bytes are it?**  Recorded — but not here.  See below.
 - **What may be said about it?**  That it was fitted on SYNTHETIC data as
   a software self-check, and nothing more.
+
+Logical version, serialized instance
+------------------------------------
+These are two different things and this module keeps them apart.
+
+``ModelVersionManifest`` is the **portable logical** record and is
+DVC-declared.  Its identifier is built from scientific and software
+provenance only.
+
+The ``.joblib``'s actual SHA-256 is an **execution-specific** fact and
+lives in an :class:`~engagevr.schemas.mlops.ArtifactIntegrityRecord`
+written beside the version directory, which is never DVC-declared.  It
+must: ``joblib.dump`` writes scikit-learn's raw tree-node buffer, whose C
+struct has seven never-initialised padding bytes per node, so two
+serializations of one model disagree — measurably, in this repository's
+own baseline run, for 191 of 200 trees.  An identifier built on that
+digest renames the same model on every machine.
+
+The relation is therefore::
+
+    one logical model version  ->  N serialized artifact instances
+
+Tamper detection is unchanged and is not weakened: every generated model
+file still has a recorded SHA-256, the run's own ``checksums.json`` still
+records it, ``--verify`` still checks it, and altering a model file still
+changes its integrity record.  See DEC-105.
 
 The fourth question — *should it be used?* — has no field.  There is no
 stage, no alias, no promotion, and no approval, because nobody has made
@@ -28,10 +53,10 @@ in order to be described.
 
 The identifier
 --------------
-``model_version_id`` is a deterministic function of the content above, so
-re-deriving a version from the same run reproduces the identifier rather
-than minting a new one.  No wall clock and no random component
-participates.
+``model_version_id`` is a deterministic function of the provenance above,
+so re-deriving a version from the same run reproduces the identifier
+rather than minting a new one.  No wall clock, no random component, and
+no platform-sensitive binary checksum participates.
 """
 
 from __future__ import annotations
@@ -50,6 +75,7 @@ from engagevr.mlops.fingerprints import (
     sha256_payload,
     split_fingerprint,
 )
+from engagevr.mlops.stage_record import EXECUTION_SPECIFIC_MODEL_REASON
 from engagevr.schemas.experiments import (
     SELF_CHECK_DISCLAIMER,
     SOFTWARE_SELF_CHECK_BANNER,
@@ -58,6 +84,8 @@ from engagevr.schemas.experiments import (
 from engagevr.schemas.mlops import (
     MLOPS_DISCLAIMER,
     MODEL_VERSION_LIMITATION,
+    ArtifactIntegrityEntry,
+    ArtifactIntegrityRecord,
     ConfigurationVersion,
     ModelVersionManifest,
     python_series,
@@ -130,35 +158,57 @@ def _estimator_kinds(metrics: Mapping[str, Any]) -> dict[str, str]:
     return kinds
 
 
+def estimator_parameters_fingerprint(parameters: Mapping[str, Any]) -> str:
+    """SHA-256 over one estimator's recorded configuration.
+
+    What the producing run wrote for this estimator: its class, its
+    hyperparameters, its imputation and standardisation treatment, and its
+    search grid.  Changing any of them is a different model, so the
+    fingerprint participates in the logical identity; nothing in it varies
+    between two machines.
+    """
+    return sha256_payload(parameters)
+
+
 def build_model_version_id(
     *,
     source_run_id: str,
     target_name: str,
     task_type: str,
     estimator_type: str,
+    estimator_class: str | None,
+    parameters_digest: str,
     model_name: str,
     dataset_fingerprint: str,
     split_digest: str,
     feature_digest: str,
     config_digest: str,
     serialization_format: str,
-    model_artifact_sha256: str,
     version: str,
 ) -> str:
-    """Deterministic identifier for one serialized estimator."""
+    """Portable logical identifier for one fitted estimator.
+
+    Provenance only.  The serialized artifact's SHA-256 is deliberately
+    absent: it is a fact about one execution's heap and one machine's
+    library build, and folding it in would give the same model a different
+    identifier on every machine — which is exactly the defect DEC-105
+    corrects.  The digest is still recorded, in the artifact-integrity
+    execution record.
+    """
     digest = sha256_payload(
         {
             "source_run_id": source_run_id,
             "target_name": target_name,
             "task_type": task_type,
             "estimator_type": estimator_type,
+            "estimator_class": estimator_class,
+            "estimator_parameters_fingerprint": parameters_digest,
             "model_name": model_name,
             "dataset_fingerprint": dataset_fingerprint,
             "split_fingerprint": split_digest,
             "feature_schema_fingerprint": feature_digest,
             "config_fingerprint": config_digest,
             "serialization_format": serialization_format,
-            "model_artifact_sha256": model_artifact_sha256,
             "engagevr_version": version,
         }
     )[:12]
@@ -192,12 +242,7 @@ def build_model_versions(
             "publish an identifier for an estimator nobody finished fitting."
         )
 
-    recorded_checksums: dict[str, str] = {}
-    checksums_path = directory / "checksums.json"
-    if checksums_path.is_file():
-        loaded = json.loads(checksums_path.read_text(encoding="utf-8"))
-        if isinstance(loaded, dict):
-            recorded_checksums = {str(k): str(v) for k, v in loaded.items()}
+    recorded_checksums = _recorded_checksums(directory)
 
     models_directory = directory / "models"
     if not models_directory.is_dir():
@@ -247,6 +292,7 @@ def build_model_versions(
             )
         estimator_parameters = parameters.get(base, {})
         estimator_class = estimator_parameters.get("estimator_class")
+        parameters_digest = estimator_parameters_fingerprint(estimator_parameters)
         manifests.append(
             ModelVersionManifest(
                 model_version_id=build_model_version_id(
@@ -254,13 +300,18 @@ def build_model_versions(
                     target_name=str(manifest["target_name"]),
                     task_type=str(manifest["task_type"]),
                     estimator_type=kinds.get(base, "unknown"),
+                    estimator_class=(
+                        str(estimator_class)
+                        if isinstance(estimator_class, str)
+                        else None
+                    ),
+                    parameters_digest=parameters_digest,
                     model_name=path.stem,
                     dataset_fingerprint=str(manifest["dataset_fingerprint"]),
                     split_digest=split_digest,
                     feature_digest=feature_digest,
                     config_digest=configuration.config_fingerprint,
                     serialization_format="joblib-pickle",
-                    model_artifact_sha256=digest,
                     version=engagevr_version(),
                 ),
                 target_name=str(manifest["target_name"]),
@@ -283,16 +334,18 @@ def build_model_versions(
                 dataset_fingerprint=str(manifest["dataset_fingerprint"]),
                 split_fingerprint=split_digest,
                 feature_schema_fingerprint=feature_digest,
+                estimator_parameters_fingerprint=parameters_digest,
                 feature_catalog_version=catalog_version,
                 feature_count=len(feature_set),
                 configuration=configuration,
                 serialization_library_version=joblib_version,
                 model_artifact_path=relative,
-                model_artifact_sha256=digest,
-                model_artifact_bytes=path.stat().st_size,
+                # The model file's own digest is deliberately absent: see
+                # DEC-105. It is in the artifact-integrity record, which
+                # build_model_artifact_integrity assembles from the same run.
                 referenced_checksums={
                     name: recorded_checksums[name]
-                    for name in (*REFERENCED_DOCUMENTS, relative)
+                    for name in REFERENCED_DOCUMENTS
                     if name in recorded_checksums
                 },
                 engagevr_version=str(manifest.get("engagevr_version", "unknown")),
@@ -355,18 +408,69 @@ def _is_synthetic(counts: Mapping[str, int], *, eligible: bool) -> bool:
     return not eligible
 
 
+def build_model_artifact_integrity(
+    manifests: Sequence[ModelVersionManifest], run_directory: Path
+) -> tuple[ArtifactIntegrityEntry, ...]:
+    """The real SHA-256 of every serialized estimator a version names.
+
+    This is where the model checksums went, and nothing about tamper
+    detection is softer for the move: every file is hashed, a changed
+    model file changes this record, and :func:`verify_model_version`
+    checks against it.  What changed is only that these digests no longer
+    sit inside a DVC-declared document, where a correct reproduction on
+    another machine would have looked like a changed pipeline.
+
+    The model file is hashed, never loaded: it is a pickle.
+    """
+    directory = Path(run_directory)
+    entries: list[ArtifactIntegrityEntry] = []
+    seen: set[str] = set()
+    for manifest in manifests:
+        relative = manifest.model_artifact_path
+        if relative in seen:
+            continue
+        target = directory / relative
+        if not target.is_file():
+            raise ModelVersionError(
+                f"{target} is named by model version "
+                f"{manifest.model_version_id} but does not exist; its "
+                "integrity cannot be recorded."
+            )
+        seen.add(relative)
+        entries.append(
+            ArtifactIntegrityEntry(
+                path=relative,
+                sha256=sha256_file(target),
+                size_bytes=target.stat().st_size,
+                excluded_from_portable_identity=EXECUTION_SPECIFIC_MODEL_REASON,
+            )
+        )
+    return tuple(sorted(entries, key=lambda entry: entry.path))
+
+
 def write_model_versions(
-    manifests: Sequence[ModelVersionManifest], output_directory: Path
+    manifests: Sequence[ModelVersionManifest],
+    output_directory: Path,
+    *,
+    integrity: Sequence[ArtifactIntegrityEntry] = (),
 ) -> tuple[Path, ...]:
     """Write one JSON document per version, atomically.
 
     Every written document is byte-stable: a version record carries no
-    creation timestamp, because it is a DVC-declared output and a wall
-    clock inside one would rewrite ``dvc.lock`` on every reproduction.
-    When the directory was written is recorded in
-    ``<directory>.execution.json`` beside it, which is never declared.
+    creation timestamp and no serialized-artifact checksum, because it is
+    a DVC-declared output and either one would rewrite ``dvc.lock`` — the
+    timestamp on every reproduction, the checksum on every machine.
+
+    Two sidecars are written beside the directory, never inside it, and
+    neither is ever DVC-declared: ``<directory>.execution.json`` records
+    when the versions were built, and
+    ``<directory>.artifact-integrity.execution.json`` records the actual
+    SHA-256 of every model file they name.
     """
-    from engagevr.mlops.execution import write_execution_sidecar
+    from engagevr.mlops.execution import (
+        write_execution_sidecar,
+        write_integrity_sidecar,
+    )
     from engagevr.training.artifacts import write_json_atomic
 
     directory = Path(output_directory)
@@ -381,7 +485,26 @@ def write_model_versions(
         describes=repository_relative(directory),
         produced_by="engagevr model-manifest",
     )
+    write_integrity_sidecar(
+        directory,
+        integrity,
+        describes=repository_relative(directory),
+        produced_by="engagevr model-manifest",
+        # Run-relative, matching ModelVersionManifest.model_artifact_path,
+        # so a reader holding a version record can resolve its artifact
+        # without knowing where the pipeline root is.
+        paths_relative_to=(
+            "the producing run directory named by each version's source_run_directory"
+        ),
+    )
     return tuple(written)
+
+
+def read_artifact_integrity(path: Path) -> ArtifactIntegrityRecord:
+    """Read and validate a persisted artifact-integrity record."""
+    return ArtifactIntegrityRecord.model_validate(
+        json.loads(Path(path).read_text(encoding="utf-8"))
+    )
 
 
 def read_model_version(path: Path) -> ModelVersionManifest:
@@ -391,11 +514,22 @@ def read_model_version(path: Path) -> ModelVersionManifest:
 
 
 def verify_model_version(
-    manifest: ModelVersionManifest, *, run_directory: Path | None = None
+    manifest: ModelVersionManifest,
+    *,
+    run_directory: Path | None = None,
+    integrity: ArtifactIntegrityRecord | Sequence[ArtifactIntegrityEntry] | None = None,
 ) -> tuple[str, ...]:
     """Artifacts whose current bytes disagree with the recorded checksum.
 
-    The model file is checked by hashing it, never by loading it.
+    The byte-stable run documents are checked against the version's own
+    ``referenced_checksums``.  The model file is checked against the
+    execution-specific integrity record, which is where its digest lives
+    after DEC-105; when no record is supplied the run's own
+    ``checksums.json`` is used, and when neither is available the model
+    file is reported as unverifiable rather than silently passed.
+
+    The model file is checked by hashing it, never by loading it: it is a
+    pickle, and loading one executes code in it.
     """
     directory = (
         Path(run_directory)
@@ -403,18 +537,50 @@ def verify_model_version(
         else Path(manifest.source_run_directory)
     )
     mismatched: list[str] = []
-    target = directory / manifest.model_artifact_path
-    if not target.is_file():
-        mismatched.append(manifest.model_artifact_path)
-    elif sha256_file(target) != manifest.model_artifact_sha256:
-        mismatched.append(manifest.model_artifact_path)
+    relative = manifest.model_artifact_path
+    expected = _expected_model_digest(manifest, directory, integrity)
+    target = directory / relative
+    if not target.is_file() or expected is None:
+        mismatched.append(relative)
+    elif sha256_file(target) != expected:
+        mismatched.append(relative)
     for name, digest in manifest.referenced_checksums.items():
-        if name == manifest.model_artifact_path:
-            continue
         referenced = directory / name
         if not referenced.is_file() or sha256_file(referenced) != digest:
             mismatched.append(name)
     return tuple(sorted(set(mismatched)))
+
+
+def _expected_model_digest(
+    manifest: ModelVersionManifest,
+    run_directory: Path,
+    integrity: ArtifactIntegrityRecord | Sequence[ArtifactIntegrityEntry] | None,
+) -> str | None:
+    """The SHA-256 this model file is supposed to have, or ``None``."""
+    entries: Sequence[ArtifactIntegrityEntry] = ()
+    if isinstance(integrity, ArtifactIntegrityRecord):
+        entries = integrity.artifacts
+    elif integrity is not None:
+        entries = tuple(integrity)
+    for entry in entries:
+        if entry.path == manifest.model_artifact_path:
+            return entry.sha256
+    recorded = _recorded_checksums(run_directory)
+    return recorded.get(manifest.model_artifact_path)
+
+
+def _recorded_checksums(run_directory: Path) -> dict[str, str]:
+    """The producing run's own ``checksums.json``, or an empty mapping."""
+    path = Path(run_directory) / "checksums.json"
+    if not path.is_file():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:  # pragma: no cover - caught upstream
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return {str(key): str(value) for key, value in loaded.items()}
 
 
 def summarise(manifest: ModelVersionManifest) -> str:
@@ -434,8 +600,11 @@ __all__ = [
     "SOFTWARE_SELF_CHECK_BANNER",
     "ArtifactError",
     "ModelVersionError",
+    "build_model_artifact_integrity",
     "build_model_version_id",
     "build_model_versions",
+    "estimator_parameters_fingerprint",
+    "read_artifact_integrity",
     "read_model_version",
     "summarise",
     "verify_model_version",
