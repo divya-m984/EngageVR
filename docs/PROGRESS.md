@@ -1476,4 +1476,99 @@ right place after CI proved it was in the wrong one.
 
 ### Milestone 11: Research Documentation
 
-**Status:** Not started
+**Status:** Milestone 11 research documentation complete; all human-subject
+materials remain drafts requiring appropriate institutional review before use.
+
+Milestone 11 completes the planned research-documentation layer without
+changing the scientific status of the project. No participant study has been
+conducted, no participant-labelled EngageVR dataset exists, and no
+institutional or ethical approval is claimed.
+
+**Completed deliverables:**
+
+1. `docs/RESEARCH_PROPOSAL.md`
+   - research aim, questions, scientific scope, proposed study, limitations,
+     and future laboratory direction.
+
+2. `docs/HYPOTHESES.md`
+   - explicit alternative/null hypotheses for multimodal fusion,
+     personalization, selective prediction, static-versus-adaptive evaluation,
+     and rPPG robustness.
+
+3. `docs/EXPERIMENTAL_VARIABLES.md`
+   - experimental, participant-outcome, model-output, signal-quality,
+     adaptation, personalization, provenance, and exclusion variables.
+
+4. `docs/EXPERIMENT_DESIGN.md`
+   - prospective within-participant static-versus-adaptive crossover design,
+     counterbalancing, adaptation lifecycle, stop controls, and interpretation
+     boundaries.
+
+5. `docs/DATA_COLLECTION_PROTOCOL.md`
+   - proposed participant/session workflow, measurement collection,
+     synchronization, provenance, missingness, quality, storage, and operator
+     procedures.
+
+6. `docs/CONSENT_TEMPLATE.md`
+   - unapproved participant information and consent template with unresolved
+     fields explicitly marked for institutional completion and review.
+
+7. `docs/RISK_ASSESSMENT.md`
+   - participant, adaptation, sensing, privacy, security, technical,
+     research-integrity, and hardware risks with provisional mitigations and
+     deployment blockers.
+
+8. `docs/ETHICS_AND_PRIVACY.md`
+   - privacy-preserving defaults, pseudonymization boundaries, webcam/raw-video
+     rules, data minimization, participant autonomy, interpretation limits, and
+     external-processing restrictions.
+
+9. `docs/STATISTICAL_ANALYSIS_PLAN.md`
+   - prospective analysis populations, primary/secondary outcome rules,
+     repeated-measures handling, missing data, exclusions, effect sizes,
+     confidence intervals, multiplicity, and hypothesis-specific analyses.
+
+10. `docs/DATASET_CARDS.md`
+    - research-facing cards for UBFC-rPPG, the EngageVR synthetic feature
+      dataset, and the explicitly nonexistent future participant dataset
+      template.
+
+11. `docs/MODEL_CARDS.md`
+    - cards for classification baselines, regression baselines, multimodal
+      fusion, personalization, classification selective prediction, and
+      regression conformal uncertainty.
+
+12. `docs/LIMITATIONS.md`
+    - existing milestone-spanning limitations document retained as the
+      Milestone 11 limitations deliverable; no duplicate limitations file was
+      created.
+
+13. `docs/HARDWARE_VALIDATION_PLAN.md`
+    - staged physical-webcam, rPPG-reference, timing, Unity/task, VR, and
+      integrated laboratory validation plan.
+
+14. `docs/FUTURE_LAB_EXTENSION_PLAN.md`
+    - phased roadmap from physical hardware validation through approved pilot,
+      participant-labelled model validation, static-versus-adaptive study, and
+      later replication/extension.
+
+**Acceptance criteria:**
+
+- [x] All required research documents are drafted.
+- [x] Human-subject documents are explicitly marked as drafts requiring
+      institutional review.
+- [x] No document claims ethical or institutional approval.
+
+**Scientific and ethical boundary:**
+
+Milestone 11 documents how future research could be conducted; it does not
+supply the missing evidence itself. Synthetic software checks remain
+scientifically ineligible, no model is a validated or approved champion, rPPG
+has not been validated against a local physical reference, personalization has
+not demonstrated participant benefit, and adaptive difficulty has not been
+shown to be safe, appropriate, or beneficial for participants.
+
+Participant recruitment, consent, participant-data collection, and
+participant-facing adaptive experimentation remain future activities requiring
+the appropriate institutional pathway and the unresolved study-specific
+decisions documented throughout the Milestone 11 materials.
