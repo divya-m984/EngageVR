@@ -1,0 +1,94 @@
+# EngageVR research dashboard (Milestone 9), containerised (Milestone 10).
+#
+# This image runs the EXISTING dashboard -- `engagevr dashboard`, the
+# Streamlit application in src/engagevr/dashboard/ -- and nothing else.
+# There is no second dashboard: Milestone 10 packages the one Milestone 9
+# built.
+#
+# READ-ONLY
+# ---------
+# The dashboard does not train, calibrate, re-run, dispatch, acknowledge,
+# modify, or delete anything, and it never opens a model file. The
+# artifact and session roots are mounted READ-ONLY by
+# docker-compose.yml, which makes that boundary a filesystem fact as well
+# as a code property.
+#
+# SCOPE AND SECURITY
+# ------------------
+# No authentication, no authorisation, no audit log. It is a local
+# research tool. The container binds 0.0.0.0 because a container's
+# loopback is not reachable from the host; compose publishes the port to
+# 127.0.0.1 only. Do not expose it to a network: it renders whatever is
+# in the artifact root to anyone who can reach the port.
+
+# ---------------------------------------------------------------- builder
+FROM python:3.12-slim-bookworm AS builder
+
+COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /uvx /bin/
+
+# No BuildKit cache mounts: they would make these images buildable
+# only by a daemon with buildx, and a packaging milestone whose
+# images cannot be built by a plain `docker build` has packaged
+# nothing. Layer ordering already keeps rebuilds cheap.
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_NO_CACHE=1 \
+    UV_PROJECT_ENVIRONMENT=/app/.venv
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --locked --no-dev --no-install-project
+
+COPY src ./src
+RUN uv sync --locked --no-dev
+
+# ---------------------------------------------------------------- runtime
+FROM python:3.12-slim-bookworm AS runtime
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y \
+        libgl1 \
+        libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --uid 10001 engagevr
+
+ENV PATH="/app/.venv/bin:${PATH}" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    # Streamlit must not try to open a browser or phone home from a
+    # container. Both are also set on the command line; the environment
+    # covers the direct `streamlit run` path documented for development.
+    STREAMLIT_SERVER_HEADLESS=true \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    # Streamlit writes its own state here. Inside the image, not into a
+    # mounted volume, because the mounted volumes are read-only.
+    HOME=/home/engagevr
+
+WORKDIR /app
+
+COPY --from=builder --chown=engagevr:engagevr /app/.venv /app/.venv
+COPY --chown=engagevr:engagevr src ./src
+COPY --chown=engagevr:engagevr configs ./configs
+COPY --chown=engagevr:engagevr pyproject.toml README.md ./
+
+# Mount points for the two roots. Empty in the image: no experiment
+# artifact, no session recording, no dataset, no model binary, and no
+# local state is ever baked in. The dashboard handles an empty artifact
+# root by reporting that there is nothing to show.
+RUN mkdir -p /app/artifacts/experiments /app/artifacts/sessions \
+    && chown -R engagevr:engagevr /app/artifacts
+
+USER engagevr
+
+EXPOSE 8501
+
+# Streamlit's own liveness route.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=4).status == 200 else 1)"
+
+CMD ["python", "-m", "engagevr", "dashboard", \
+     "--address", "0.0.0.0", \
+     "--port", "8501", \
+     "--artifact-root", "/app/artifacts/experiments"]

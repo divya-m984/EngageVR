@@ -13,8 +13,17 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
+      # dvc.lock is EXCLUDED from both whitespace hooks. DVC owns that
+      # file's formatting and wraps long commands with a trailing space on
+      # every continued line -- 22 of them. Stripping those makes the
+      # committed lock differ from the one `dvc repro` produces, so the CI
+      # step `dvc.lock is byte-stable across a fresh reproduction` fails on
+      # a whitespace edit nobody made deliberately. A formatter must never
+      # rewrite a generated lock file; see DEC-100 and DEC-105.
       - id: trailing-whitespace
+        exclude: ^dvc\.lock$
       - id: end-of-file-fixer
+        exclude: ^dvc\.lock$
       - id: check-yaml
       - id: check-json
       - id: check-added-large-files

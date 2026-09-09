@@ -264,6 +264,69 @@ def m6_personalization_regression_run(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Milestone 10: MLOps, packaging, reproducibility
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def m10_baseline_run(
+    tmp_path_factory: pytest.TempPathFactory,
+    m5_dataset: Path,
+) -> Path:
+    """A completed SYNTHETIC baseline run directory, with persisted models.
+
+    Two estimators rather than the full registry: the Milestone 10 tests
+    read a run's documents and hash its model files, and a larger run
+    would only make them slower without exercising a different path.
+    """
+    from engagevr.schemas.experiments import EvaluationMode
+    from engagevr.training.calibration import CalibrationMethod
+    from engagevr.training.runner import RunConfiguration, run_baselines
+
+    directory = tmp_path_factory.mktemp("m10-baseline")
+    run_baselines(
+        RunConfiguration(
+            dataset_path=m5_dataset,
+            target_name=TargetName.ENGAGEMENT_CLASS,
+            output_directory=directory,
+            evaluation_mode=EvaluationMode.SOFTWARE_SELF_CHECK,
+            n_splits=3,
+            random_seed=42,
+            model_names=("dummy", "logistic_regression"),
+            calibration_method=CalibrationMethod.SIGMOID,
+            run_ablations=False,
+        )
+    )
+    return directory
+
+
+@pytest.fixture(scope="session")
+def m10_shifted_dataset(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A second SYNTHETIC draw, for the distribution-shift diagnostic."""
+    configuration = SyntheticDatasetConfig(
+        seed=1337,
+        subjects=12,
+        sessions_per_subject=2,
+        windows_per_session=5,
+        window_duration_seconds=10.0,
+        window_step_seconds=10.0,
+    )
+    directory = tmp_path_factory.mktemp("m10-shifted")
+    path = directory / "m10-shifted.parquet"
+    write_dataset(
+        generate_synthetic_dataset(configuration),
+        path,
+        target_names=list(TargetName),
+        window_duration_seconds=configuration.window_duration_seconds,
+        window_step_seconds=configuration.window_step_seconds,
+        windows_overlap=configuration.windows_overlap,
+        creation_configuration=configuration.model_dump(mode="json"),
+        random_seed=configuration.seed,
+    )
+    return path
+
+
 @pytest.fixture(scope="session")
 def m7_selective_configuration() -> SelectivePredictionConfiguration:
     """A selective-prediction policy sized for the shared fixture dataset.

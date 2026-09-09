@@ -1,0 +1,98 @@
+# Build context exclusions.
+#
+# The rule this file enforces: NOTHING GENERATED, LOCAL, OR PRIVATE ENTERS
+# AN IMAGE. Experiment artifacts, session recordings, model binaries,
+# tracking stores, datasets, caches, editor state, and anything that could
+# hold a credential are excluded, so a built image contains source,
+# configuration, the protocol artefacts, and the locked dependencies --
+# and nothing that describes this machine or anyone on it.
+
+# Version control and its metadata
+.git/
+.gitignore
+.gitattributes
+
+# Local environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.dvc/cache/
+.dvc/tmp/
+.coverage
+htmlcov/
+
+# Generated experiment state. artifacts/ holds run directories, datasets,
+# model .joblib files, session recordings, drift reports, and smoke
+# output. None of it belongs in an image: it is this machine's evidence,
+# it is gitignored, and baking it in would ship a stale copy that a
+# reader could mistake for the current one.
+artifacts/
+models/
+mlruns/
+mlflow.db
+*.db
+*.sqlite
+*.sqlite3
+*.joblib
+*.pkl
+data/raw/
+data/interim/
+data/processed/
+data/synthetic/
+
+# Raw media and recordings. Never present in this repository, excluded so
+# that a stray local file cannot become part of an image.
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.npy
+*.npz
+*.png
+*.jpg
+*.jpeg
+
+# Secrets and local settings
+.env
+.env.*
+secrets/
+*.pem
+*.key
+*.crt
+*.p12
+
+# Local assistant and editor state
+.claude/
+CLAUDE.local.md
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Not needed at runtime. Tests, notebooks, the Unity project (never
+# compiled by this repository), and the docs tree keep the context small
+# and the image free of things nothing in it runs.
+tests/
+notebooks/
+unity/
+docs/
+scripts/
+Dockerfile.*
+docker-compose.yml
+.dockerignore
+.github/
+.pre-commit-config.yaml
+Makefile
+dvc.lock
+
+# OS noise
+.DS_Store
+Thumbs.db

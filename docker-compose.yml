@@ -1,0 +1,80 @@
+# EngageVR local stack: the Milestone 4 backend and the Milestone 9
+# dashboard, as they already exist. No new service, no model server, no
+# tracking server, no database.
+#
+# Usage:
+#     docker compose config      # validate without building
+#     docker compose build
+#     docker compose up -d
+#     curl http://127.0.0.1:8000/health
+#     curl http://127.0.0.1:8501/_stcore/health
+#     docker compose down
+#
+# BOTH PORTS ARE PUBLISHED TO 127.0.0.1 ONLY.
+# Neither service has authentication, authorisation, or transport
+# encryption. The backend accepts session data; the dashboard renders
+# whatever is in the artifact root. Publishing either to a routable
+# interface would expose both to anyone who can reach the port.
+#
+# NO SECRET APPEARS IN THIS FILE, and neither service reads one.
+#
+# Packaging is not production readiness. A stack that starts says the
+# software runs; it says nothing about whether any estimate it carries is
+# valid.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: engagevr-backend:local
+    container_name: engagevr-backend
+    # Loopback only. Changing this to "8000:8000" publishes an
+    # unauthenticated bridge on every interface.
+    ports:
+      - "127.0.0.1:8000:8000"
+    # The one writable mount: session recordings. Created on the host if
+    # absent; gitignored. Nothing else is written.
+    volumes:
+      - ./artifacts/sessions:/app/artifacts/sessions:rw
+    restart: "no"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    image: engagevr-dashboard:local
+    container_name: engagevr-dashboard
+    ports:
+      - "127.0.0.1:8501:8501"
+    # READ-ONLY, both roots. The dashboard is read-only by construction
+    # and by test; mounting :ro makes it read-only by filesystem too, so
+    # a future change cannot quietly acquire the ability to write over
+    # the evidence it is displaying.
+    volumes:
+      - ./artifacts/experiments:/app/artifacts/experiments:ro
+      - ./artifacts/sessions:/app/artifacts/sessions:ro
+    # Not depends_on: the dashboard reads files. It never calls the
+    # backend, and starting one without the other is a supported way to
+    # use either.
+    restart: "no"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=4).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

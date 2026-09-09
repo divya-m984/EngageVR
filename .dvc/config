@@ -1,0 +1,18 @@
+[core]
+    # No telemetry. This milestone is local-first and must work with no
+    # network; an anonymised usage ping is still a network call.
+    analytics = false
+
+    # No automatic `git add`. DVC must never stage anything on this
+    # repository's behalf: the repository owner inspects, stages, and
+    # commits by hand.
+    autostage = false
+
+    # No version check on start. Another network call, and a pipeline
+    # whose reproducibility depends on reaching a server is not
+    # reproducible.
+    check_update = false
+
+    # No remote is configured, and none is required. The software demo is
+    # regenerated from source by `dvc repro`; there is nothing to pull.
+    # See docs/MLOPS.md.
