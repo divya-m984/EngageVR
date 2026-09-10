@@ -3,10 +3,14 @@
 ## Current Milestone: 10 -- MLOps and Packaging
 
 **Status:** Milestone 10 implementation **locally complete**; GitHub-hosted CI
-acceptance **pending corrected branch push**. The previous CI run on PR #9
-failed a cross-environment reproducibility check; the cause was established
-by measurement and corrected (DEC-105), and the definitive test is the next
-run. Scientific evaluation and human-subject validation remain pending.
+acceptance **pending corrected branch push**. Two CI runs have failed a
+cross-environment reproducibility check, each for a different cause, and
+each cause was established by measurement and corrected: serialized
+estimator bytes on PR #9 (DEC-105), and CPU-dependent floating-point
+arithmetic on PR #10 (DEC-106); an audit then closed a fail-open hole in
+the second repair's own check (DEC-107). The definitive test is the next
+run.
+Scientific evaluation and human-subject validation remain pending.
 Nothing in this milestone produces evidence: reproducibility is not
 validity, tracking is not validation, registration is not approval,
 packaging is not production readiness, and drift alerts are engineering
@@ -1194,15 +1198,15 @@ configured interval, where it previously refreshed only on request.
 
 **Started:** 2026-08-29
 **Completed (implementation):** 2026-08-29
-**Corrected after CI:** 2026-08-31 (cross-environment reproducibility,
-DEC-105)
+**Corrected after CI:** 2026-08-31 (serialized estimator bytes, DEC-105);
+2026-09-10 (CPU-dependent numerical artifacts, DEC-106)
 
 **Status:** Milestone 10 implementation **locally complete**;
 GitHub-hosted CI acceptance **pending corrected branch push**. Three of the
 four PROJECT_PLAN acceptance criteria are met and verified locally; "CI
-passes" cannot be claimed -- the previous run on PR #9 **failed** a
-cross-environment reproducibility check, which is corrected below and
-awaits a fresh run. Scientific evaluation and human-subject validation
+passes" cannot be claimed -- the runs on PR #9 and PR #10 both **failed** a
+cross-environment reproducibility check, each is corrected below, and a
+fresh run is awaited. Scientific evaluation and human-subject validation
 remain PENDING and are unaffected by anything in this milestone.
 
 **Objective (PROJECT_PLAN, verbatim):** "MLflow, DVC stages, Docker, GitHub
@@ -1213,9 +1217,13 @@ instructions."
 - [x] Clean clone can reproduce the demo
 - [ ] CI passes -- workflow syntax and every command verified locally, and
       **the last GitHub-hosted run FAILED** the cross-environment `dvc.lock`
-      check on PR #9. Root cause established and corrected (DEC-105);
+      check on PR #10, as the run before it did on PR #9. Both root causes
+      established by measurement and corrected (DEC-105, DEC-106);
       **execution on GitHub-hosted runners pending corrected branch push**.
       This may be marked complete only once GitHub Actions actually passes.
+      Note that PR #10's failing commit was documentation-only and that the
+      same inputs had passed on `main` 87 minutes earlier: the runner fleet
+      is heterogeneous, so this criterion is only settled by a real run.
 - [x] Model artifact and configuration are versioned
 - [x] Dockerized backend and dashboard work
 
@@ -1384,6 +1392,8 @@ runner whose CPU produces different numbers will fail the lock check loudly
 instead of the difference being hidden. Numerical portability across CPU
 microarchitectures is untested and not claimed.
 
+*That prediction came true on PR #10, and is corrected by DEC-106 below.*
+
 *Correction (DEC-105).* A stage record now has three classifications --
 `portable_deterministic`, `execution_specific`, `volatile_provenance` --
 and `.joblib`/`.pkl`/`.pickle` are execution-specific: named with a reason,
@@ -1418,12 +1428,76 @@ Measured after the correction:
   execution-specific, and 3 volatile; the 10 model checksums are all present
   in `stages/baseline.artifact-integrity.execution.json`.
 
-**Decisions recorded:** DEC-096 through DEC-105 (see `docs/DECISIONS.md`).
+*Second correction (DEC-106), 2026-09-10.* CI run 34403534631 on PR #10
+failed the same check again, and this time the failing commit was
+**documentation-only**: the same pipeline inputs had passed on `main` 87
+minutes earlier. Ten artifacts moved, and seven of them belong to the
+`uncertainty` stage, **which persists no `.joblib` at all** -- so DEC-105's
+mechanism could not explain it.
+
+Root cause, measured: numpy and scipy ship OpenBLAS built `DYNAMIC_ARCH`,
+which selects a kernel from the CPU it finds at run time. Forcing
+`OPENBLAS_CORETYPE=HASWELL` on the development machine reproduced the GitHub
+runner's `feature_importance.parquet` **byte for byte**. OS, glibc, CPython
+patch level, thread count, and numpy's own SIMD dispatch were each tested
+and ruled out.
+
+A stage record now has **four** classifications. A model-derived document is
+`cpu_dependent_numeric`: pinned by an exact **structure** digest -- schema,
+ordering, dtypes, non-float values, predicted labels, null and non-finite
+positions -- with its raw SHA-256 in the artifact-integrity sidecar and its
+floats held to a declared engineering portability tolerance
+(`|a-b| <= 1e-6 + 1e-6*|b|`) by **comparison**, via the new
+`engagevr numeric-check`. Numerical identity cannot be a digest: rounding
+puts values on a grid that two one-ULP-apart values can straddle.
+
+Nothing was rounded, quantised, or dropped. No output file was modified. The
+lock check and `git diff --exit-code -- dvc.lock` are unchanged, and remain
+strict because the lock now carries no CPU-dependent value at all.
+
+Measured after this correction:
+- Stage records built from three OpenBLAS kernels (`SKYLAKEX`, `HASWELL`,
+  `NEHALEM`) are **byte-identical**.
+- Worst float deviation across those kernels and 76,896 values:
+  **1.0712e-08**; zero structure-digest mismatches. The tolerance is 93x
+  that, and no wider.
+- `numeric-check` between a `SKYLAKEX` and a `HASWELL` execution passes:
+  15 byte-identical artifacts, 10 numerically equivalent.
+- `stages/baseline.json` now lists 5 portable deterministic, 3
+  cpu-dependent numeric, 10 execution-specific, and 3 volatile;
+  `stages/uncertainty.json` lists 6, 7, 0, and 3.
+
+*Third correction (DEC-107), 2026-09-10.* An audit of the DEC-106 repair
+found a **fail-open hole** in its own check: CI compared two executions of
+the same runner against each other, and with floats no longer reaching
+`dvc.lock`, both could be wrong together. Measured — mutating all 1,463
+floats in `baseline/metrics.json` with the structure untouched left
+`dvc.lock` byte-identical and the same-runner comparison exiting zero. A
+score that moved from `0.72` to `0.91` passed every gate.
+
+The accepted numbers are now **committed** to `references/numeric/` (10
+references, 25,632 values, 572 KB) with a `MANIFEST.json` recording each
+file's exact SHA-256, and CI compares a fresh execution against them. The
+check is driven by the stage records, so a newly classified artifact with
+no accepted reference fails closed, as do stale, missing, unlisted,
+modified, and corrupted references.
+
+Measured after this correction: the documented mutation now fails with
+`1463 of 1463 values exceed the tolerance (worst delta 9.100e-01)`
+through the complete CLI path CI runs; a 1-ULP and an observed
+cross-kernel difference both pass. Model-version identity is explicitly
+separated from numerical portability in a required schema field, and
+`verify_model_version_portability` is the entry point that checks the
+numbers.
+
+**Decisions recorded:** DEC-096 through DEC-107 (see `docs/DECISIONS.md`).
 DEC-100 was revised on 2026-08-29: `dvc.lock` is tracked **and byte-stable**,
 where an earlier revision accepted a lock that churned on every reproduction.
 DEC-104 records the boundary that makes the stability possible; its clause
 "models included" is superseded by DEC-105, which draws the boundary in the
-right place after CI proved it was in the wrong one.
+right place after CI proved it was in the wrong one; DEC-106 extends the
+same principle to CPU-dependent floating-point values, answering the
+question DEC-105 explicitly left open.
 
 **Known limitations (see `docs/LIMITATIONS.md`):**
 1. Every number this milestone touches came from synthetic data. It is a
@@ -1433,9 +1507,10 @@ right place after CI proved it was in the wrong one.
    calibrated against an outcome, a participant, or an observed failure.
 3. The drift layer has never been run against real data, real drift, or a
    real deployment. It has only ever compared two synthetic draws.
-4. Reproducibility was demonstrated on one machine and in one Linux
-   container that shares that machine's CPU. macOS, Windows, ARM, and a
-   different x86-64 microarchitecture are untested.
+4. Reproducibility was demonstrated on one machine, in one Linux container
+   that shares that machine's CPU, and across three simulated CPU
+   microarchitectures via `OPENBLAS_CORETYPE`. macOS, Windows, and ARM are
+   untested, and a real second machine remains the only decisive test.
 5. **Byte reproducibility of Python pickle/joblib artifacts is not assumed
    across execution environments.** A `.joblib` embeds uninitialised C
    struct padding; its checksum is execution-specific artifact integrity,
@@ -1476,4 +1551,99 @@ right place after CI proved it was in the wrong one.
 
 ### Milestone 11: Research Documentation
 
-**Status:** Not started
+**Status:** Milestone 11 research documentation complete; all human-subject
+materials remain drafts requiring appropriate institutional review before use.
+
+Milestone 11 completes the planned research-documentation layer without
+changing the scientific status of the project. No participant study has been
+conducted, no participant-labelled EngageVR dataset exists, and no
+institutional or ethical approval is claimed.
+
+**Completed deliverables:**
+
+1. `docs/RESEARCH_PROPOSAL.md`
+   - research aim, questions, scientific scope, proposed study, limitations,
+     and future laboratory direction.
+
+2. `docs/HYPOTHESES.md`
+   - explicit alternative/null hypotheses for multimodal fusion,
+     personalization, selective prediction, static-versus-adaptive evaluation,
+     and rPPG robustness.
+
+3. `docs/EXPERIMENTAL_VARIABLES.md`
+   - experimental, participant-outcome, model-output, signal-quality,
+     adaptation, personalization, provenance, and exclusion variables.
+
+4. `docs/EXPERIMENT_DESIGN.md`
+   - prospective within-participant static-versus-adaptive crossover design,
+     counterbalancing, adaptation lifecycle, stop controls, and interpretation
+     boundaries.
+
+5. `docs/DATA_COLLECTION_PROTOCOL.md`
+   - proposed participant/session workflow, measurement collection,
+     synchronization, provenance, missingness, quality, storage, and operator
+     procedures.
+
+6. `docs/CONSENT_TEMPLATE.md`
+   - unapproved participant information and consent template with unresolved
+     fields explicitly marked for institutional completion and review.
+
+7. `docs/RISK_ASSESSMENT.md`
+   - participant, adaptation, sensing, privacy, security, technical,
+     research-integrity, and hardware risks with provisional mitigations and
+     deployment blockers.
+
+8. `docs/ETHICS_AND_PRIVACY.md`
+   - privacy-preserving defaults, pseudonymization boundaries, webcam/raw-video
+     rules, data minimization, participant autonomy, interpretation limits, and
+     external-processing restrictions.
+
+9. `docs/STATISTICAL_ANALYSIS_PLAN.md`
+   - prospective analysis populations, primary/secondary outcome rules,
+     repeated-measures handling, missing data, exclusions, effect sizes,
+     confidence intervals, multiplicity, and hypothesis-specific analyses.
+
+10. `docs/DATASET_CARDS.md`
+    - research-facing cards for UBFC-rPPG, the EngageVR synthetic feature
+      dataset, and the explicitly nonexistent future participant dataset
+      template.
+
+11. `docs/MODEL_CARDS.md`
+    - cards for classification baselines, regression baselines, multimodal
+      fusion, personalization, classification selective prediction, and
+      regression conformal uncertainty.
+
+12. `docs/LIMITATIONS.md`
+    - existing milestone-spanning limitations document retained as the
+      Milestone 11 limitations deliverable; no duplicate limitations file was
+      created.
+
+13. `docs/HARDWARE_VALIDATION_PLAN.md`
+    - staged physical-webcam, rPPG-reference, timing, Unity/task, VR, and
+      integrated laboratory validation plan.
+
+14. `docs/FUTURE_LAB_EXTENSION_PLAN.md`
+    - phased roadmap from physical hardware validation through approved pilot,
+      participant-labelled model validation, static-versus-adaptive study, and
+      later replication/extension.
+
+**Acceptance criteria:**
+
+- [x] All required research documents are drafted.
+- [x] Human-subject documents are explicitly marked as drafts requiring
+      institutional review.
+- [x] No document claims ethical or institutional approval.
+
+**Scientific and ethical boundary:**
+
+Milestone 11 documents how future research could be conducted; it does not
+supply the missing evidence itself. Synthetic software checks remain
+scientifically ineligible, no model is a validated or approved champion, rPPG
+has not been validated against a local physical reference, personalization has
+not demonstrated participant benefit, and adaptive difficulty has not been
+shown to be safe, appropriate, or beneficial for participants.
+
+Participant recruitment, consent, participant-data collection, and
+participant-facing adaptive experimentation remain future activities requiring
+the appropriate institutional pathway and the unresolved study-specific
+decisions documented throughout the Milestone 11 materials.

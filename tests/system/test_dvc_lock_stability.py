@@ -145,6 +145,35 @@ pytestmark = [
 ]
 
 
+def _stage_record(stage: str) -> Path:
+    """The DVC-declared record for one stage, relative to a tree root."""
+    return Path(f"artifacts/pipeline/mlops/stages/{stage}.json")
+
+
+def _integrity_sidecar(stage: str) -> Path:
+    """The never-declared sidecar holding that stage's raw digests."""
+    return Path(
+        f"artifacts/pipeline/mlops/stages/{stage}.artifact-integrity.execution.json"
+    )
+
+
+def _deterministic(record: dict) -> set[str]:
+    return {artifact["path"] for artifact in record["deterministic_artifacts"]}
+
+
+def _execution_specific(record: dict) -> set[str]:
+    return set(record["execution_specific_artifacts"])
+
+
+def _cpu_numeric(record: dict) -> set[str]:
+    """Paths the stage classified cpu-dependent numeric (DEC-106)."""
+    assert "cpu_dependent_numeric_artifacts" in record, (
+        "the stage record predates DEC-106; the classification it needs is "
+        "absent rather than empty"
+    )
+    return {artifact["path"] for artifact in record["cpu_dependent_numeric_artifacts"]}
+
+
 class TestLockStability:
     def test_both_trees_produced_a_lock(self, two_trees: tuple[Path, Path]) -> None:
         first, second = two_trees
@@ -265,38 +294,131 @@ class TestLockStability:
             ]
             assert excluded, "the baseline run persists estimators"
 
-    def test_every_model_checksum_survives_outside_the_lock(
+    def test_the_integrity_sidecar_holds_exactly_the_excluded_classes(
         self, two_trees: tuple[Path, Path]
     ) -> None:
-        # The digest moved; it was not lost. Each tree records every model
-        # file's real SHA-256 in a sidecar that is not a declared output.
+        # The sidecar is the home of every digest that may not enter
+        # portable identity, and of nothing else. Two classes live there
+        # now: serialized estimators (DEC-105) and cpu-dependent
+        # numerical documents (DEC-106). Asserted as EXACT equality, and
+        # derived from each stage's own record rather than from a glob,
+        # so a file that silently stopped being digested fails here.
+        for tree in two_trees:
+            for stage in ("baseline", "uncertainty"):
+                record = read_json(tree / _stage_record(stage))
+                sidecar = read_json(tree / _integrity_sidecar(stage))
+                expected = _execution_specific(record) | _cpu_numeric(record)
+                recorded = {entry["path"] for entry in sidecar["artifacts"]}
+                assert recorded == expected, (
+                    f"{stage}: the integrity sidecar must hold exactly the "
+                    "execution-specific and cpu-dependent numerical "
+                    "artifacts"
+                )
+                assert recorded, f"{stage}: both classes cannot be empty"
+                assert sidecar["paths_relative_to"]
+
+    def test_every_recorded_digest_matches_the_bytes_on_disk(
+        self, two_trees: tuple[Path, Path]
+    ) -> None:
+        # Integrity, not identity: these digests exist to detect
+        # corruption and tampering, so they must describe the real bytes.
         import hashlib
 
-        import yaml
+        pipeline = Path("artifacts/pipeline")
+        for tree in two_trees:
+            for stage in ("baseline", "uncertainty"):
+                sidecar = read_json(tree / _integrity_sidecar(stage))
+                for entry in sidecar["artifacts"]:
+                    target = tree / pipeline / entry["path"]
+                    assert target.is_file(), entry["path"]
+                    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+                    assert digest == entry["sha256"], entry["path"]
+                    assert target.stat().st_size == entry["size_bytes"]
 
-        sidecar = Path(
-            "artifacts/pipeline/mlops/stages/baseline.artifact-integrity.execution.json"
-        )
+    def test_every_serialized_estimator_has_a_raw_checksum_outside_identity(
+        self, two_trees: tuple[Path, Path]
+    ) -> None:
+        # DEC-105, preserved unchanged. Cross-checked against the files on
+        # disk as well as the record, so a persisted estimator the record
+        # forgot to classify fails rather than passing unnoticed.
         pipeline = Path("artifacts/pipeline")
         run = pipeline / "experiments/baseline-engagement_class"
         for tree in two_trees:
-            record = read_json(tree / sidecar)
-            assert record["artifacts"]
-            for entry in record["artifacts"]:
-                target = tree / pipeline / entry["path"]
-                assert target.is_file()
-                assert (
-                    hashlib.sha256(target.read_bytes()).hexdigest() == entry["sha256"]
-                )
-            assert record["paths_relative_to"]
-            recorded = {entry["path"] for entry in record["artifacts"]}
+            record = read_json(tree / _stage_record("baseline"))
+            sidecar = read_json(tree / _integrity_sidecar("baseline"))
+            recorded = {entry["path"] for entry in sidecar["artifacts"]}
             on_disk = {
                 str(path.relative_to(tree / pipeline))
                 for path in sorted((tree / run / "models").glob("*.joblib"))
             }
-            assert recorded == on_disk
+            assert on_disk, "the baseline run persists estimators"
+            classified = {
+                path
+                for path in _execution_specific(record)
+                if path.endswith((".joblib", ".pkl", ".pickle"))
+            }
+            assert classified == on_disk, (
+                "every persisted estimator must be classified "
+                "execution-specific; an unclassified one would default to "
+                "portable deterministic and poison the lock"
+            )
+            assert on_disk <= recorded
+            assert on_disk.isdisjoint(_deterministic(record))
+
+    def test_every_cpu_numerical_artifact_has_a_raw_checksum_outside_identity(
+        self, two_trees: tuple[Path, Path]
+    ) -> None:
+        # DEC-106/DEC-107. The structure digest is what reaches the lock;
+        # the raw digest still exists, in the sidecar, and the two are
+        # different values describing different things.
+        for tree in two_trees:
+            for stage in ("baseline", "uncertainty"):
+                record = read_json(tree / _stage_record(stage))
+                sidecar = read_json(tree / _integrity_sidecar(stage))
+                raw = {entry["path"]: entry["sha256"] for entry in sidecar["artifacts"]}
+                numeric = _cpu_numeric(record)
+                assert numeric, f"{stage} declares cpu-dependent numerical output"
+                assert numeric <= set(raw)
+                assert numeric.isdisjoint(_deterministic(record))
+                for artifact in record["cpu_dependent_numeric_artifacts"]:
+                    assert artifact["structure_sha256"] != raw[artifact["path"]], (
+                        "the structure digest must not be the raw digest; "
+                        "they are different claims about different content"
+                    )
+
+    def test_the_uncertainty_stage_persists_no_estimator_yet_records_digests(
+        self, two_trees: tuple[Path, Path]
+    ) -> None:
+        # The case that proves DEC-106 is not the pickle story retold:
+        # this stage writes no .joblib at all, so every raw digest in its
+        # sidecar belongs to a cpu-dependent numerical document. Seven of
+        # its artifacts moved on the GitHub runner of CI run 34403534631
+        # while it persisted zero estimators.
+        for tree in two_trees:
+            record = read_json(tree / _stage_record("uncertainty"))
+            sidecar = read_json(tree / _integrity_sidecar("uncertainty"))
+            assert _execution_specific(record) == set()
+            recorded = {entry["path"] for entry in sidecar["artifacts"]}
+            assert recorded == _cpu_numeric(record)
+            assert recorded, "a stage with numerical output must record digests"
+            assert not [path for path in recorded if path.endswith((".joblib", ".pkl"))]
+
+    def test_no_integrity_sidecar_reaches_the_lock(
+        self, two_trees: tuple[Path, Path]
+    ) -> None:
+        import yaml
+
+        for tree in two_trees:
             lock = yaml.safe_load((tree / "dvc.lock").read_text(encoding="utf-8"))
-            assert "artifact-integrity" not in json.dumps(lock)
+            rendered = json.dumps(lock)
+            assert "artifact-integrity" not in rendered
+            for stage in ("baseline", "uncertainty"):
+                sidecar = read_json(tree / _integrity_sidecar(stage))
+                for entry in sidecar["artifacts"]:
+                    assert entry["sha256"] not in rendered, (
+                        f"{entry['path']}: a raw digest excluded from portable "
+                        "identity appeared in dvc.lock"
+                    )
 
     def test_synthetic_provenance_agrees_and_stays_ineligible(
         self, two_trees: tuple[Path, Path]

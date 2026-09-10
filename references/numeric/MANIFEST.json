@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.1",
+  "target": "engagement_class",
+  "references": {
+    "experiments__baseline-engagement_class__feature_importance.parquet.reference.json": "9e16d4a504707e6b85d85b341037a9a2c4c442855011a85caf905fb2b583eebe",
+    "experiments__baseline-engagement_class__metrics.json.reference.json": "9b7901c8c7b79f4cad584d8de70b96af918721ee69a8170bb34b795b868f249e",
+    "experiments__baseline-engagement_class__predictions.parquet.reference.json": "fd7661f4de3c897254e18f003da32c44cf01639fd532faf3ad3846da85adbc4d",
+    "experiments__uncertainty-engagement_class__adaptation_gate.parquet.reference.json": "172dc63c49d166f35cb8e33f04c71cdf40974bd8d30a0b22057f0a76e950914c",
+    "experiments__uncertainty-engagement_class__metrics.json.reference.json": "86866c62b057e67fc437c9f09dd3e058387c860bc00b1ec029f222c9fd8c7881",
+    "experiments__uncertainty-engagement_class__predictions.parquet.reference.json": "324202a3b67aaeaa16ad850eb47cde2d640581d8a5069fc65243845ef4e788da",
+    "experiments__uncertainty-engagement_class__selective_metrics.json.reference.json": "f9a21525806849fb4b3fa0d5a8c0991b6d1f80af12f2db3796eb830848ed51c8",
+    "experiments__uncertainty-engagement_class__selective_predictions.parquet.reference.json": "8a89c66e327e9378e7858ba39ef8e428bbe7c778f1b71ab2ab267ecf2580be00",
+    "experiments__uncertainty-engagement_class__thresholds.json.reference.json": "87b5933a14c16b87a1a883801fe4a921a0cbb12f96c5ed027b6559e4582e9bbf",
+    "experiments__uncertainty-engagement_class__uncertainty.json.reference.json": "90922cdbb0903ef57b9101f8fd7bb8dcf31b77fcb3c6d584e95300c421b8e72a"
+  },
+  "atol": 1e-06,
+  "rtol": 1e-06,
+  "numeric_tolerance": "|a-b| <= 1e-06 + 1e-06*|b|; non-finite values compared exactly. Engineering portability tolerance, not a scientific uncertainty interval.",
+  "note": "Accepted numerical references for a SYNTHETIC software self-check. Reproducing them demonstrates cross-environment numerical portability of the software. It is not evidence of model accuracy, calibration, or validity."
+}

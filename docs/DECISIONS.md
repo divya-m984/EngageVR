@@ -3315,7 +3315,8 @@ that has never been evaluated against a person.
 ### DEC-104: Deterministic DVC Outputs Are Separated From Volatile Execution Metadata
 
 **Date:** 2026-08-29
-**Status:** Accepted, with one clause superseded by DEC-105
+**Status:** Accepted, with one clause superseded by DEC-105 and the
+classification extended by DEC-106
 
 **Amendment (2026-08-31):** this decision said the stage record "checksums
 every byte-stable file the run produced, **models included**". The words
@@ -3324,6 +3325,15 @@ estimator's bytes are not a function of the pipeline's inputs. Everything
 else in this decision stands unchanged — the runner/record/output boundary,
 the execution sidecars, the Python series, the fail-safe classification. Only
 the claim that a `.joblib` is byte-stable is withdrawn. See DEC-105.
+
+**Amendment (2026-09-10):** the phrase "checksums every byte-stable file"
+narrows once more. A model-derived document — `metrics.json`,
+`predictions.parquet`, and six others — is byte-stable on *one* CPU but
+not across CPUs, because OpenBLAS is built `DYNAMIC_ARCH` and selects a
+kernel at run time. Such a file is now pinned by an exact **structure**
+digest instead of its raw bytes. The boundary, the sidecars, and the
+fail-safe default are unchanged; there are four classifications rather
+than three. See DEC-106.
 
 **Context:** DEC-100 requires `dvc.lock` to be byte-stable across fresh
 reproductions. Measured, twenty of the pipeline's fifty-six files were not:
@@ -3406,7 +3416,17 @@ opt-in two-source-tree proof
 ### DEC-105: Serialized Estimator Bytes Are Execution-Specific, Not Portable Identity
 
 **Date:** 2026-08-31
-**Status:** Accepted
+**Status:** Accepted; its open question answered by DEC-106
+
+**Follow-up (2026-09-10):** the finding this decision recorded but refused
+to absorb — "numerical portability across CPUs is narrower than this" —
+was confirmed by CI run 34403534631, and the question it left open ("whether
+*its* difference was the padding alone or also a numerical difference")
+now has an answer: also numerical, and in the `uncertainty` stage
+*exclusively* numerical, because that stage persists no `.joblib` at all.
+Nothing in this decision is withdrawn. The three classifications become
+four, and the artifacts named here move from `portable_deterministic` to
+`cpu_dependent_numeric`. See DEC-106.
 
 **Context — what CI found that local testing could not.** DEC-104's boundary
 passed every local check: two consecutive fresh reproductions in the working
@@ -3591,3 +3611,335 @@ serialized binary byte identity; and an artifact integrity checksum is not
 scientific validity. No model became production, champion, approved, or
 validated, and `scientific_evaluation_eligible` remains `false` everywhere:
 this was an operational defect and an operational repair.
+
+---
+
+### DEC-106: CPU-Dependent Numerical Artifacts Are a Fourth Classification
+
+**Date:** 2026-09-10
+**Status:** Accepted
+
+**Context — the prediction DEC-105 made, and the run that confirmed it.**
+DEC-105 recorded a finding it deliberately refused to absorb:
+
+> *A finding that must not be hidden: numerical portability across CPUs is
+> narrower than this.* Reproducing the baseline stage with only the
+> OpenBLAS kernel changed (`OPENBLAS_CORETYPE=Haswell`, then `Nehalem`)
+> changed `metrics.json`, `predictions.parquet`, and
+> `feature_importance.parquet` as well as the model files. [...] those
+> artifacts stay portable deterministic, so if a runner's CPU ever
+> produces different numbers the lock check fails loudly and says so.
+
+It also named what it could not establish from one machine: whether the
+GitHub runner's difference was the `.joblib` padding alone or also a
+numerical difference. "CI now prints the lock diff and uploads the stage
+records so the next run answers this with data instead of inference."
+
+On PR #10, CI run 34403534631, it answered. Four declared outputs moved —
+`stages/baseline.json`, `stages/uncertainty.json`,
+`mlops/model_versions`, `mlops/reproducibility.json` — each at an
+unchanged size, which is the signature of a fixed-width digest changing
+inside a document rather than a document changing shape.
+
+**The failure is not a Milestone 11 regression.** Run 34394859213 on
+`main` at `c3b43e2` **passed** this check at 19:24 UTC. Run 34403534631 on
+`f70d6d8` **failed** it 87 minutes later. `git diff --name-only c3b43e2
+f70d6d8` touches nothing under `src/`, `configs/`, `params.yaml`,
+`dvc.yaml`, `dvc.lock`, `uv.lock`, or `pyproject.toml`: it is fourteen
+documentation files. Identical inputs, two GitHub runners, two different
+locks. The `ubuntu-latest` fleet is heterogeneous, so no lock committed
+from any one machine could have been portable to all of it.
+
+**Investigation — measured, and this time the runner's own evidence was
+available.**
+
+*It is not the joblib padding.* The uploaded stage records settle it. The
+`uncertainty` stage persists **no serialized estimator at all** —
+`execution_specific=0`, and its artifact-integrity sidecar holds zero
+entries — yet **seven of its thirteen** portable-deterministic artifacts
+changed. DEC-105's mechanism cannot produce that.
+
+*It is not the OS, libc, or the interpreter.* The uploaded sidecar records
+the runner as `Linux-6.17.0-1022-azure-x86_64-with-glibc2.39`, CPython
+3.12.14, with `dependency_versions` identical to the development machine
+down to the patch. A clean `ubuntu:24.04` container reproducing the
+baseline stage matched the Arch host **byte for byte** by default.
+
+*It is not thread count.* OMP and OpenBLAS threads at 1, 2, 4, and 8: every
+checksum identical.
+
+*It is not numpy's own SIMD dispatch.* `NPY_DISABLE_CPU_FEATURES` over the
+whole AVX-512 set changed nothing.
+
+*It is the BLAS kernel.* numpy and scipy ship OpenBLAS built
+`DYNAMIC_ARCH`, which selects a kernel from the CPU it finds at run time.
+Forcing `OPENBLAS_CORETYPE` on one machine flips exactly the artifacts CI
+flagged — and reproduces the runner's `feature_importance.parquet`
+**bit for bit**: SHA-256 `6017d8f74d1b4043677d50263ea7c8992129472bbc2ffef563f5cee84cfb5f47`, 23,827 bytes,
+identical to the file GitHub produced. The mechanism is demonstrated, not
+inferred.
+
+*What actually differs is only the floats.* Across three kernels
+(`SKYLAKEX`, `HASWELL`, `NEHALEM`), both stages, and 76,896 floating-point
+values, the worst absolute deviation is **1.0712e-08**, and the schema,
+column order, row order, dtypes, predicted labels, integer counts,
+identifiers, and missing-value positions are **identical every time**.
+`splits.json`, `calibration.json`, `ablations.json`, and
+`feature_catalog.json` are byte-identical across every kernel and in the
+container: they carry no accumulated float.
+
+**Decision:** add a fourth classification, `cpu_dependent_numeric`, and
+split the artifact rather than dropping it.
+
+```
+portable_deterministic   raw SHA-256, checksummed, reaches the lock
+cpu_dependent_numeric    STRUCTURE SHA-256 in the record; raw SHA-256 in
+                         the integrity sidecar; floats held to a declared
+                         tolerance by COMPARISON
+execution_specific       named with a reason; digest in the sidecar
+volatile_provenance      named with a reason; never checksummed
+```
+
+*The structure digest is exact, and it is not the raw digest.* It covers
+the schema, the column and row order, the dtypes, every non-float value,
+every predicted label, and the positions of every null and non-finite
+entry. Floats contribute only a token naming their *kind* —
+`<float>`, `<nan>`, `<+inf>`, `<-inf>` — never their value. It is derived
+separately from the bytes and **replaces nothing**: the raw SHA-256 and
+size still go to `<name>.artifact-integrity.execution.json`, which is
+never DVC-declared, where corruption and tampering stay detectable byte
+for byte on the machine that wrote the file.
+
+*Numerical identity is a comparison, not a digest, and that is forced.*
+Quantising floats and hashing the result would give a single
+tolerance-stable fingerprint, and it does not work: rounding maps values
+onto a grid, two values one ULP apart can straddle a boundary, and with
+tens of thousands of floats per artifact a straddle is nearly certain. The
+fingerprint would then differ across machines for *some* runs — the same
+intermittent failure this decision removes. A hash has no metric;
+tolerance is a metric. So agreement is expressed as a checked relation
+between two artifacts, `engagevr numeric-check`, and only the genuinely
+exact part is hashed.
+
+*The tolerance is engineering, and it is bounded from both sides.*
+`|a-b| <= 1e-6 + 1e-6*|b|`, with non-finite values compared exactly. It is
+93x the worst measured deviation, which leaves room for an unseen CPU; it
+is no wider, because these artifacts report probabilities and scores to a
+handful of decimals and a real 1e-6 disagreement would be visible in the
+reported value. It is **not** a scientific uncertainty interval, not a
+confidence bound, and not evidence about any model. Nothing here has been
+evaluated against a participant-provided label.
+
+*Nothing is quantised, rounded, or rewritten.* The pipeline still writes
+full-precision floats. Not one metric, prediction, or importance was
+modified to make a check pass.
+
+*`dvc.lock` goes back to being strict.* Because a stage record now pins a
+model-derived document by structure, the lock contains no CPU-dependent
+value at all. Reproducing both stages under three kernels produced
+**byte-identical stage records** every time. So `git diff --exit-code --
+dvc.lock` stays in CI exactly as it was, and a difference there is once
+again a real signal.
+
+*Model versions follow the same split.* `metrics.json` left
+`referenced_checksums` for a new `referenced_structure_digests`.
+`model_version_id` was already provenance-only and is unchanged, so a
+last-bit difference does not rename a fitted model; a changed count,
+label, or schema still does, and `model-manifest --verify` still refuses a
+run whose referenced documents no longer match.
+
+*One honest limit.* A model version is derived from **one** run, so it has
+nothing to compare a float against and cannot, by itself, detect a
+numerical change that stays within its own structure. Detecting that needs
+a reference execution, which is what `numeric-check` and CI supply. This
+is asserted by a test rather than left as an assumption.
+
+*Classification stays closed.* Membership is an explicit list of eight
+file names, each observed to move in run 34403534631, each with its
+evidence recorded. An unclassified artifact is still treated as portable
+deterministic and still fails loudly. A file that cannot be read by the
+contract cannot be classified into it — a tolerance nobody can evaluate is
+not an exemption.
+
+**What was refused.** Disabling or relaxing the lock check; deleting
+`git diff --exit-code -- dvc.lock`; committing a runner-specific lock;
+dropping metrics or predictions from reproducibility; rounding the
+pipeline's own outputs; widening a tolerance until CI passed; classifying
+artifacts as CPU-dependent without measuring them; pinning
+`OPENBLAS_CORETYPE` (it reproduced one artifact exactly but not
+`metrics.json`, so it is insufficient, and GitHub's fleet varies between
+runs regardless); and calling numerical equivalence "byte
+reproducibility".
+
+**Verified.** Two fresh reproductions on one machine leave `dvc.lock`
+byte-identical. Stage records built from three OpenBLAS kernels are
+byte-identical. `numeric-check` passes between a `SKYLAKEX` and a
+`HASWELL` execution — 15 byte-identical artifacts, 10 numerically
+equivalent — and fails on a float beyond tolerance, a reordered row, a
+changed dtype, a relabelled prediction, a moved missing value, a changed
+identifier, and an unreadable document. 56 new tests in
+`tests/unit/test_numeric_contract.py`, plus model-version and stage-record
+regressions; lint, format, and mypy clean.
+
+The definitive test is the next GitHub Actions run, which no local
+environment can stand in for: a container shares the host CPU and is not
+GitHub's runner, and the fleet is heterogeneous. **This decision does not
+claim CI passes.**
+
+**Consequence:** the repository states two different things and no longer
+confuses them. *Byte reproducibility* is claimed for artifacts that have
+it. *Numerical portability* — exact structure, floats within a declared
+engineering tolerance — is claimed, checked, and reported separately for
+the artifacts whose last bits follow the CPU. Reproducibility is still not
+validity, a checksum is still not an evaluation, and
+`scientific_evaluation_eligible` remains `false` everywhere.
+
+---
+
+### DEC-107: Numerical Portability Is Checked Against a Committed Accepted Reference
+
+**Date:** 2026-09-10
+**Status:** Accepted
+
+**Context — DEC-106 closed a hole and opened a smaller one.** Removing
+floating-point values from portable identity was correct: they follow the
+CPU's BLAS kernel, and hashing them made a correct reproduction on another
+machine look like a changed pipeline. But it also removed them from
+*detection*, and the first version of the check compounded that by
+comparing two executions of the **same** CI runner against each other:
+
+```
+cp -r artifacts/pipeline /tmp/pipeline-first
+rm -rf artifacts/pipeline && dvc repro
+engagevr numeric-check --reference /tmp/pipeline-first --candidate artifacts/pipeline
+```
+
+Both sides come from one CPU. Both can be wrong in the same way.
+
+**Measured, not hypothesised.** All 1,463 floats in
+`baseline/metrics.json` were mutated — schema, keys, dtypes, ordering, and
+labels untouched — and the full gate was re-run:
+
+| gate | result |
+|---|---|
+| stage record / `dvc.lock` | **byte-identical** — not caught |
+| `numeric-check` (same runner, A vs B) | **exit 0** — not caught |
+
+A result changed from `0.72` to `0.91` passed every check. That is
+fail-open, and it is a real regression against the pre-DEC-106 behaviour,
+where the raw digest of `metrics.json` was in the lock and would have
+caught it.
+
+**Decision:** the accepted numbers are committed to the repository, and a
+fresh execution is compared against **them**.
+
+```
+references/numeric/                     committed, reviewed
+  MANIFEST.json                         SHA-256 of every reference
+  experiments__...__metrics.json.reference.json
+  ...
+          |
+    engagevr numeric-check --accepted references/numeric
+```
+
+*A reference is structure plus values.* `structure_sha256` pins
+everything exact; `values` holds every **finite** float at full
+precision, in the same canonical traversal the structure digest uses, so
+a matching structure guarantees the sequences correspond element for
+element. Non-finite values are absent because the structure digest
+already pins where each one sits and JSON has no portable spelling for
+them.
+
+*Nothing is quantised.* The pipeline still writes full-precision output,
+and the reference records what it wrote. The tolerance lives in the
+*comparison*, not in the data.
+
+*The reference is tied to the revision.* It is a tracked file, so it
+moves with the commit and cannot be a fact about a runner, a cache, or a
+mutable external location. `MANIFEST.json` records the exact SHA-256 of
+each reference, so a reference edited without being re-accepted fails, as
+does one listed and missing, and one present but unlisted.
+
+*The check is driven by the stage records, not the reference directory.*
+That is what makes it fail closed: an artifact newly classified
+`cpu_dependent_numeric` with no accepted reference is an **error**, not
+an absence. A reference the pipeline no longer declares is also an error,
+because a stale reference checks nothing and hides that it stopped.
+
+*Classification is by exact pipeline-relative path, never by file name.*
+An audit found the allowlist keyed on the basename, which contradicted
+the contract it was supposed to enforce: a future artifact called
+`metrics.json`, under any stage or any target, would have inherited the
+exemption without anybody having measured it. The ten entries are now the
+ten exact paths observed to move in CI run 34403534631. A same-named file
+elsewhere is portable deterministic and fails loudly if it is not
+byte-stable. The paths embed the target, so changing `pipeline.target`
+produces unclassified artifacts — which is the right failure, not a
+regression.
+
+*The accepted reference set is authoritative for the tolerance.* `atol`
+and `rtol` are recorded **structurally**, as numbers, in three places:
+`MANIFEST.json`, every reference beside it, and every stage record. All
+three must agree, and the running code's `DEFAULT_TOLERANCE` is checked
+against the manifest too, so widening it without re-accepting the
+references is refused rather than silently applied to numbers accepted
+under a stricter contract. `compare_to_reference` derives its tolerance
+from the reference itself. `--atol`/`--rtol` are permitted with
+`--accepted` only when exactly equal to the accepted values, and refused
+otherwise with the two tolerances named; a caller cannot loosen the gate
+from the command line. Changing the tolerance therefore means editing the
+code, re-running `numeric-reference --update`, and reviewing the diff.
+
+*Updating a reference is an act of acceptance.* `engagevr
+numeric-reference --update` rewrites them and says so; the diff is the
+review surface. Without `--update` the command verifies and nothing else.
+
+*Both halves are kept.* `--reference` still compares two executions —
+that is same-environment agreement — and `--accepted` is what makes the
+check cross-environment. CI passes both, and the command says plainly
+which claim it just supported.
+
+**Model version identity is explicitly not this.** Three separable
+things, and the schema now says so in a required field:
+
+```
+model_version_id                provenance, configuration, data, code
+raw artifact SHA-256            exact execution integrity
+accepted reference comparison   cross-environment numerical portability
+```
+
+A tolerance relation cannot be a single independently computed hash —
+tolerance equality is not transitive and quantisation has boundary
+problems — so `model_version_id` is *not* asked to move for a
+beyond-tolerance number. Instead `numerical_portability_note` states that
+identity does not certify portability, `verify_model_version`'s docstring
+repeats it, and `verify_model_version_portability` is the entry point
+that does invoke the reference comparison and fails on a
+beyond-tolerance difference. Tests assert all three.
+
+**What was refused.** Leaving the same-runner comparison as the only
+numerical gate; putting CPU-dependent raw hashes back into `dvc.lock`;
+quantising model output to make a digest work; deriving the reference
+from whatever the CI job produced earlier; storing it outside version
+control; and weakening the exact same-environment lock test, which is
+unchanged.
+
+**Verified.** The documented mutation now fails: `1463 of 1463 values
+exceed the tolerance (worst delta 9.100e-01)`, exit 1, through the
+complete CLI path CI runs. `--atol 0.5` against the accepted references
+exits 1 with `refused: --atol/--rtol asked for atol=0.5 ... the accepted
+reference set is authoritative`. A 1-ULP and an observed cross-kernel
+difference both pass. Schema, dtype, row-order, label, and
+missingness changes all fail. A missing, modified, corrupted, unlisted,
+or stale reference fails. 42 tests in
+`tests/unit/test_numeric_reference.py`; the committed references are
+verified from a clean checkout by four of them.
+
+The definitive test remains the next GitHub Actions run. **This decision
+does not claim CI passes.**
+
+**Consequence:** the repository can now state that a fresh execution
+produced the numbers it accepts, on a machine it has never seen — and can
+fail when that stops being true. Reproducing a reference means the
+software is portable. It still does not mean any number in it is correct,
+and `scientific_evaluation_eligible` remains `false` everywhere.

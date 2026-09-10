@@ -99,20 +99,26 @@ jobs:
             exit 1
           fi
 
-      # The invariant DEC-100 states: a FRESH reproduction leaves the
-      # tracked dvc.lock byte-identical -- both on this runner and against
-      # the lock committed from a contributor's machine. Every declared
-      # output is deterministic; the timestamped Milestone 5-8 provenance
-      # (DEC-104) and the serialized estimators (DEC-105) are deliberately
-      # not declared. A difference here means a declared output stopped
-      # being byte-stable, and the second half is the CROSS-ENVIRONMENT
-      # check that same-machine testing cannot make.
+      # The reproducibility contract is checked in four separate parts,
+      # because they are four different claims and collapsing them is how
+      # a real finding gets mistaken for churn.
       #
-      # On failure the lock diff is printed: it names the exact declared
-      # outputs whose hashes moved, which is what distinguishes "a model
-      # binary differs" from "the numbers differ". The freshly produced
-      # stage records are uploaded below so the per-artifact checksums can
-      # be compared rather than guessed at.
+      #   1. same-environment exact reproduction (this step, first half)
+      #   2. cross-environment identity of every DVC-declared output
+      #      (this step, second half -- git diff against the committed lock)
+      #   3. exact integrity of raw artifacts (the integrity step below)
+      #   4. numerical equivalence of the cpu_dependent_numeric class
+      #      (the numeric-check step below)
+      #
+      # Parts 1 and 2 are still whole-file comparisons of dvc.lock, and
+      # deliberately so. After DEC-106 the lock contains no CPU-dependent
+      # value at all: a stage record pins a model-derived document by its
+      # STRUCTURE digest -- schema, ordering, dtypes, labels, null
+      # positions -- and never by its raw bytes. Verified by reproducing
+      # the baseline and uncertainty stages under three OpenBLAS kernels:
+      # the stage records were byte-identical every time. So the strict
+      # check stays strict, and a lock difference here is once again a
+      # real signal rather than a fact about the runner's CPU.
       - name: dvc.lock is byte-stable across a fresh reproduction
         run: |
           sha256sum dvc.lock | tee lock-first.txt
@@ -130,15 +136,88 @@ jobs:
             echo "committed lock. This is a CROSS-ENVIRONMENT reproducibility"
             echo "failure: a declared output is not portable between the"
             echo "machine that committed the lock and this one."
-            echo "The declared outputs named in the diff above are the ones"
-            echo "that moved. Compare them against DEC-105: a serialized"
-            echo "estimator's checksum must not be in portable identity, and"
-            echo "a change in metrics.json or predictions.parquet is a"
-            echo "NUMERICAL portability finding that must not be abstracted"
-            echo "away. Per-artifact checksums are in the uploaded stage"
-            echo "records."
+            echo "Since DEC-106 the lock carries no CPU-dependent value, so"
+            echo "this is NOT the expected consequence of a different runner"
+            echo "CPU. Read the diff above as a real change: a structure"
+            echo "digest moved (schema, ordering, dtypes, predicted labels,"
+            echo "or missing-value positions), a byte-deterministic artifact"
+            echo "changed, or a new output was added that nobody classified"
+            echo "and which therefore defaulted to portable deterministic."
+            echo "Per-artifact evidence is in the uploaded stage records."
             exit 1
           fi
+
+      # Part 3: the raw digests did not disappear when two classes of
+      # artifact left portable identity -- they moved to the integrity
+      # sidecars, and this asserts they are still there and still
+      # correct. Corruption and tampering stay detectable byte for byte
+      # on the machine that produced the artifact.
+      - name: Raw artifact integrity is recorded and verifiable
+        run: |
+          uv run python -m engagevr model-manifest \
+            --run artifacts/pipeline/experiments/baseline-engagement_class \
+            --output /tmp/model-versions-verify \
+            --verify
+          uv run python - <<'PY'
+          import json, hashlib, sys
+          from pathlib import Path
+          root = Path("artifacts/pipeline")
+          failures = []
+          checked = 0
+          for sidecar in sorted(root.glob("mlops/stages/*.artifact-integrity.execution.json")):
+              record = json.loads(sidecar.read_text(encoding="utf-8"))
+              for entry in record["artifacts"]:
+                  target = root / entry["path"]
+                  if not target.is_file():
+                      failures.append(f"{entry['path']}: recorded but missing")
+                      continue
+                  digest = hashlib.sha256(target.read_bytes()).hexdigest()
+                  checked += 1
+                  if digest != entry["sha256"]:
+                      failures.append(f"{entry['path']}: sha256 mismatch")
+                  if target.stat().st_size != entry["size_bytes"]:
+                      failures.append(f"{entry['path']}: size mismatch")
+          print(f"verified {checked} raw artifact digest(s)")
+          if checked == 0:
+              sys.exit("no integrity entries were checked; the sidecars are missing")
+          if failures:
+              sys.exit("\n".join(failures))
+          PY
+
+      # Part 4a: every declared cpu-dependent numerical artifact has a
+      # COMMITTED accepted reference, and every reference matches the
+      # SHA-256 recorded in its manifest. Fails closed: a newly
+      # classified artifact with no accepted reference is an error, and
+      # so is a reference edited without being re-accepted.
+      - name: Accepted numerical references are present and unmodified
+        run: uv run python -m engagevr numeric-reference
+
+      # Part 4b: THE CROSS-ENVIRONMENT NUMERICAL CHECK.
+      #
+      # This runner's freshly reproduced numbers are compared against the
+      # numbers COMMITTED to the repository, not against another
+      # execution of this same runner. That distinction is the whole
+      # point: floats no longer reach dvc.lock, so two executions on one
+      # machine can be wrong together and agree. Measured before this
+      # step existed -- mutating all 1,463 floats in metrics.json left
+      # dvc.lock byte-identical and a same-runner comparison exited zero.
+      #
+      # The accepted references are a property of the repository
+      # revision, so a runner whose CPU produces materially different
+      # numbers fails here regardless of how self-consistent it is.
+      #
+      # --reference additionally holds the second execution to the first,
+      # which is same-environment agreement; --accepted is what makes the
+      # check cross-environment.
+      - name: Numerical portability against the ACCEPTED references
+        run: |
+          cp -r artifacts/pipeline /tmp/pipeline-first
+          rm -rf artifacts/pipeline
+          uv run dvc repro
+          uv run python -m engagevr numeric-check \
+            --accepted references/numeric \
+            --reference /tmp/pipeline-first \
+            --candidate artifacts/pipeline
 
       # Two independent executions must agree on LOGICAL identity:
       # dataset fingerprints, run identifiers, model-version identifiers,

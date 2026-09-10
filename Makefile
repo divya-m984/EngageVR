@@ -1,5 +1,6 @@
 .PHONY: install format lint typecheck test test-cov check clean protocol \
-        smoke mlops-demo dvc-dag dvc-repro dvc-verify docker-build docker-up docker-down \
+        smoke mlops-demo dvc-dag dvc-repro dvc-verify numeric-verify \
+        docker-build docker-up docker-down \
         release-check
 
 install:
@@ -70,6 +71,18 @@ dvc-verify:
 		rm -f .dvc-verify-first .dvc-verify-second; \
 		exit 1; \
 	fi
+
+# Hold the current pipeline output to the COMMITTED accepted numbers
+# (DEC-107). This is the CROSS-ENVIRONMENT check: the references are a
+# property of the repository revision, so a machine whose CPU produces
+# materially different results fails here even if it agrees with itself.
+# Reproducing them means the software is portable, not that any number is
+# correct.
+numeric-verify:
+	@uv run python -m engagevr numeric-reference
+	@uv run python -m engagevr numeric-check \
+		--accepted references/numeric \
+		--candidate artifacts/pipeline
 
 docker-build:
 	docker build -f Dockerfile.backend -t engagevr-backend:local .

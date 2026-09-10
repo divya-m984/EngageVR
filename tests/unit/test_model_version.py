@@ -26,6 +26,8 @@ from engagevr.config import load_config
 from engagevr.mlops.model_version import (
     MANIFEST_SUFFIX,
     REFERENCED_DOCUMENTS,
+    REFERENCED_EXACT_DOCUMENTS,
+    REFERENCED_NUMERIC_DOCUMENTS,
     ModelVersionError,
     build_model_versions,
     read_model_version,
@@ -33,6 +35,7 @@ from engagevr.mlops.model_version import (
     verify_model_version,
     write_model_versions,
 )
+from engagevr.mlops.numeric_contract import structure_digest
 from engagevr.schemas.experiments import SOFTWARE_SELF_CHECK_BANNER, EvaluationMode
 from engagevr.training.artifacts import sha256_file
 
@@ -137,12 +140,41 @@ class TestBuilding:
     def test_referenced_documents_are_checksum_linked(
         self, m10_baseline_run: Path
     ) -> None:
+        # The byte-portable documents are linked by their real digest.
         version = build_model_versions(m10_baseline_run, config=load_config())[0]
-        for name in REFERENCED_DOCUMENTS:
+        for name in REFERENCED_EXACT_DOCUMENTS:
             assert name in version.referenced_checksums
             assert version.referenced_checksums[name] == sha256_file(
                 m10_baseline_run / name
             )
+
+    def test_cpu_dependent_documents_are_structure_linked(
+        self, m10_baseline_run: Path
+    ) -> None:
+        # DEC-106. metrics.json is still linked, and just as strictly
+        # about everything that is not a float — but by its structure,
+        # because its raw bytes follow the CPU's BLAS kernel.
+        version = build_model_versions(m10_baseline_run, config=load_config())[0]
+        for name in REFERENCED_NUMERIC_DOCUMENTS:
+            assert name not in version.referenced_checksums
+            assert name in version.referenced_structure_digests
+            assert version.referenced_structure_digests[name] == structure_digest(
+                m10_baseline_run / name
+            )
+
+    def test_every_referenced_document_is_linked_exactly_once(
+        self, m10_baseline_run: Path
+    ) -> None:
+        version = build_model_versions(m10_baseline_run, config=load_config())[0]
+        linked = set(version.referenced_checksums) | set(
+            version.referenced_structure_digests
+        )
+        assert set(REFERENCED_DOCUMENTS) <= linked, (
+            "a referenced document must not silently stop being linked"
+        )
+        assert set(version.referenced_checksums).isdisjoint(
+            version.referenced_structure_digests
+        )
 
     def test_the_timestamped_dataset_document_is_not_referenced(
         self, m10_baseline_run: Path

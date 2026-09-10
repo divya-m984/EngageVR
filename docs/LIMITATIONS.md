@@ -966,13 +966,24 @@ lock and the committed one. Three entries moved:
 local test was a same-machine test, so no local test could have caught
 it.** That is the honest lesson; it is recorded rather than tidied away.
 
+**It happened a second time, for a different reason.** On PR #10, CI run
+34403534631, the same job failed again — and this time the failing commit
+was documentation-only. Run 34394859213 on `main` had *passed* the same
+check 87 minutes earlier with identical pipeline inputs. Two GitHub
+runners, two different locks: the `ubuntu-latest` fleet is heterogeneous,
+and the cause was CPU-dependent floating-point arithmetic rather than
+pickle padding. See DEC-106 and the section below.
+
 Within the corrected scope the property is byte-for-byte: every
 DVC-declared output is byte-identical across fresh executions, and so is
-`dvc.lock`. That holds because two classes of file are deliberately not
-part of portable identity — the timestamped Milestone 5–8 provenance
-(DEC-104) and the serialized estimators (DEC-105) — not because anything
-was removed. A run still records when it happened, and every model file is
-still written and still checksummed.
+`dvc.lock`. That holds because three classes of file are deliberately not
+pinned by their raw bytes — the timestamped Milestone 5–8 provenance
+(DEC-104), the serialized estimators (DEC-105), and the floating-point
+*values* of model-derived documents (DEC-106) — not because anything was
+removed. A run still records when it happened, every model file is still
+written and still checksummed, and every model-derived document is still
+pinned exactly by its structure and still held to a declared numerical
+tolerance.
 
 Since the correction, the pipeline has also been reproduced in a clean
 Ubuntu 24.04 container on a different libc (2.39 against 2.44), a
@@ -1015,20 +1026,71 @@ Stated as the three things a reader should take away:
 - Logical reproducibility is **not** serialized binary byte identity.
 - An artifact integrity checksum is **not** scientific validity.
 
-### Numerical portability across CPU microarchitectures is untested
+### Model-derived numbers are not byte-portable across CPUs
 
-A separate and unresolved question. Reproducing the baseline stage with
-only the OpenBLAS kernel changed (`OPENBLAS_CORETYPE=Haswell`, then
-`Nehalem`, standing in for a different CPU) changed `metrics.json`,
-`predictions.parquet`, and `feature_importance.parquet` as well as the
-model files: ordinary last-bit floating-point differences from a different
-kernel, propagating through an iterative solver.
+This section previously said the question was untested and that the lock
+check would fail loudly if a runner's CPU ever produced different numbers.
+It did, on CI run 34403534631, and the finding is now measured rather than
+anticipated.
 
-Those artifacts are deliberately **left** in portable deterministic
-identity. If a runner's CPU ever produces different numbers, the lock check
-fails and says so, rather than the difference being absorbed by an
-abstraction. Whether the numbers are portable across the CPUs GitHub
-actually schedules is not known and is not claimed.
+numpy and scipy ship OpenBLAS built `DYNAMIC_ARCH`, which picks a kernel
+from the CPU it finds at run time. A different kernel sums a dot product
+in a different order, so a fitted coefficient differs in its last bits and
+every number derived from it follows. Eight artifacts move:
+`metrics.json`, `predictions.parquet`, `feature_importance.parquet`,
+`selective_metrics.json`, `selective_predictions.parquet`,
+`thresholds.json`, `uncertainty.json`, and `adaptation_gate.parquet`.
+
+**This is not the pickle problem.** The `uncertainty` stage persists no
+serialized estimator at all, and seven of its artifacts still moved.
+
+What is claimed, and what is not:
+
+- **Byte identity of these artifacts across CPUs is NOT claimed.** It is
+  not achievable: measured worst deviation 1.0712e-08 across three
+  OpenBLAS kernels and 76,896 values.
+- **Structural identity across CPUs IS claimed and pinned exactly** —
+  schema, column and row order, dtypes, every non-float value, every
+  predicted label, every integer, and every missing and non-finite
+  position. Zero structure-digest mismatches across every kernel measured.
+- **Numerical agreement within a declared engineering portability
+  tolerance IS claimed and checked** — `|a-b| <= 1e-6 + 1e-6*|b|`, by
+  comparison against a reference execution, not by a digest.
+
+The tolerance is an **engineering portability allowance**, not a
+scientific uncertainty interval, not a confidence bound, and not evidence
+about any model's accuracy, calibration, or validity. It says how much
+last-bit disagreement between two CPUs this repository declines to call a
+change. It says nothing about whether any number is correct — and nothing
+here has been evaluated against a participant-provided label.
+
+No output is rounded, quantised, or rewritten to achieve this. The
+pipeline still writes full-precision floats; what changed is what
+participates in *identity*.
+
+**How that claim is actually checked.** Removing floats from identity also
+removes them from `dvc.lock`, so a check that compares two executions of
+the same machine catches nothing: both come from one CPU. Measured —
+mutating all 1,463 floats in `baseline/metrics.json`, structure untouched,
+left `dvc.lock` byte-identical and a same-runner comparison exiting zero.
+A result that moved from `0.72` to `0.91` passed every gate.
+
+So the accepted numbers are **committed** to `references/numeric/`, and a
+fresh execution is compared against them rather than against itself.
+`MANIFEST.json` records each reference's exact SHA-256; the check is
+driven by the stage records, so a newly classified artifact with no
+accepted reference fails closed. See DEC-107.
+
+Three limits remain. A model version is derived from one run, so it cannot
+by itself detect a numerical change that stays within its own structure;
+`model_version_id` is not asked to move for one, and
+`verify_model_version_portability` is the entry point that does invoke the
+reference comparison. The tolerance is calibrated on the CPUs and kernels
+measured here — an architecture outside that set (ARM, for instance) has
+not been tested, and if one produced a larger deviation the check would
+fail rather than silently widen. And the accepted references record what
+this repository *accepts*, not what is correct: updating them is a
+deliberate act whose review surface is the diff. See DEC-106 and DEC-107.
 
 ### A model version is not an approval
 

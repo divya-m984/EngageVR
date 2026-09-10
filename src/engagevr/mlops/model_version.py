@@ -75,7 +75,11 @@ from engagevr.mlops.fingerprints import (
     sha256_payload,
     split_fingerprint,
 )
-from engagevr.mlops.stage_record import EXECUTION_SPECIFIC_MODEL_REASON
+from engagevr.mlops.numeric_contract import NumericContractError, structure_digest
+from engagevr.mlops.stage_record import (
+    EXECUTION_SPECIFIC_MODEL_REASON,
+    MODEL_DERIVED_NUMERIC_REASON,
+)
 from engagevr.schemas.experiments import (
     SELF_CHECK_DISCLAIMER,
     SOFTWARE_SELF_CHECK_BANNER,
@@ -114,6 +118,28 @@ REFERENCED_DOCUMENTS: tuple[str, ...] = (
     "splits.json",
     "metrics.json",
 )
+
+#: Referenced documents that reproduce byte for byte on any CPU.
+#:
+#: These carry the run's schema and its group assignment, both of which
+#: are computed from the dataset and the seed by integer and string
+#: operations with no floating-point accumulation, so their bytes are
+#: portable.  Measured across four OpenBLAS kernels and a clean Ubuntu
+#: container: identical every time.
+REFERENCED_EXACT_DOCUMENTS: tuple[str, ...] = (
+    "feature_catalog.json",
+    "splits.json",
+)
+
+#: Referenced documents whose floats follow the CPU (DEC-106).
+#:
+#: ``metrics.json`` is a document of fitted scores.  Pinning a model
+#: version to its raw digest is the same defect DEC-105 corrected for
+#: ``.joblib`` bytes, one layer up: it would rename the same fitted model
+#: on a machine whose BLAS kernel rounds differently.  The structure
+#: digest is used instead, and the raw digest goes to the integrity
+#: record.
+REFERENCED_NUMERIC_DOCUMENTS: tuple[str, ...] = ("metrics.json",)
 
 
 class ModelVersionError(ValueError):
@@ -345,9 +371,13 @@ def build_model_versions(
                 # build_model_artifact_integrity assembles from the same run.
                 referenced_checksums={
                     name: recorded_checksums[name]
-                    for name in REFERENCED_DOCUMENTS
+                    for name in REFERENCED_EXACT_DOCUMENTS
                     if name in recorded_checksums
                 },
+                # metrics.json is pinned by its structure, not its bytes:
+                # a BLAS kernel that rounds differently must not rename
+                # the same fitted model. See DEC-106.
+                referenced_structure_digests=_structure_digests(run_directory),
                 engagevr_version=str(manifest.get("engagevr_version", "unknown")),
                 python_series=python_series(str(manifest.get("python_version", "0.0"))),
                 dependency_versions={str(k): str(v) for k, v in dict(versions).items()}
@@ -445,6 +475,27 @@ def build_model_artifact_integrity(
                 excluded_from_portable_identity=EXECUTION_SPECIFIC_MODEL_REASON,
             )
         )
+    # The raw digest of every CPU-dependent numerical document the
+    # versions reference is recorded here too. It is the only place it
+    # survives once the version record moved to a structure digest, and
+    # it is what makes a corrupted metrics.json detectable byte for byte
+    # on the machine that produced it.
+    for name in REFERENCED_NUMERIC_DOCUMENTS:
+        target = directory / name
+        if name in seen or not target.is_file():
+            continue
+        seen.add(name)
+        entries.append(
+            ArtifactIntegrityEntry(
+                path=name,
+                sha256=sha256_file(target),
+                size_bytes=target.stat().st_size,
+                # The shared mechanism, not the path-keyed lookup: these
+                # paths are run-relative, and the classification allowlist
+                # is keyed by pipeline-relative path (DEC-107).
+                excluded_from_portable_identity=MODEL_DERIVED_NUMERIC_REASON,
+            )
+        )
     return tuple(sorted(entries, key=lambda entry: entry.path))
 
 
@@ -530,6 +581,14 @@ def verify_model_version(
 
     The model file is checked by hashing it, never by loading it: it is a
     pickle, and loading one executes code in it.
+
+    **This does not establish numerical portability.** Structure digests
+    cover the schema, ordering, dtypes, labels, and missing-value
+    positions; they deliberately exclude floating-point values, which
+    follow the CPU. A run whose scores moved far beyond the declared
+    tolerance passes this function unchanged. Use
+    :func:`verify_model_version_portability` when the numbers matter.
+    See DEC-107.
     """
     directory = (
         Path(run_directory)
@@ -548,7 +607,90 @@ def verify_model_version(
         referenced = directory / name
         if not referenced.is_file() or sha256_file(referenced) != digest:
             mismatched.append(name)
+    # A CPU-dependent numerical document is verified by its structure,
+    # which is exactly as strict about everything that is not a float: a
+    # truncated, reordered, relabelled, or schema-changed metrics.json
+    # still fails here. What no longer fails is the same document
+    # rewritten by a machine whose BLAS rounds differently.
+    for name, digest in manifest.referenced_structure_digests.items():
+        referenced = directory / name
+        if not referenced.is_file():
+            mismatched.append(name)
+            continue
+        try:
+            if structure_digest(referenced) != digest:
+                mismatched.append(name)
+        except NumericContractError:
+            mismatched.append(name)
     return tuple(sorted(set(mismatched)))
+
+
+def verify_model_version_portability(
+    manifest: ModelVersionManifest,
+    *,
+    run_directory: Path | None = None,
+    reference_directory: Path | None = None,
+    integrity: ArtifactIntegrityRecord | Sequence[ArtifactIntegrityEntry] | None = None,
+) -> tuple[str, ...]:
+    """Full verification: integrity, structure, **and** the numbers.
+
+    :func:`verify_model_version` deliberately stops short of the numbers,
+    because a version record derived from one run has nothing to compare
+    a float against.  This is the entry point for a caller that wants the
+    whole claim, and it adds the one check identity cannot make: every
+    CPU-dependent numerical document the version references is held to
+    the **committed accepted reference** under the declared tolerance.
+
+    A caller that asks for portability and gets an empty tuple has
+    verified portability.  A caller that uses
+    :func:`verify_model_version` alone has verified provenance and
+    structure, and must not describe the result as numerical portability.
+    """
+    from engagevr.mlops.numeric_reference import (
+        REFERENCE_DIRECTORY,
+        NumericReferenceError,
+        compare_to_reference,
+        read_reference,
+        reference_file_name,
+        verify_manifest,
+    )
+
+    directory = (
+        Path(run_directory)
+        if run_directory is not None
+        else Path(manifest.source_run_directory)
+    )
+    references = (
+        Path(reference_directory)
+        if reference_directory is not None
+        else REFERENCE_DIRECTORY
+    )
+    problems = list(
+        verify_model_version(manifest, run_directory=directory, integrity=integrity)
+    )
+    try:
+        problems.extend(verify_manifest(references))
+    except NumericReferenceError as exc:
+        problems.append(str(exc))
+        return tuple(sorted(set(problems)))
+
+    run_relative = manifest.source_run_directory.replace("\\", "/").rstrip("/")
+    for name in manifest.referenced_structure_digests:
+        artifact_path = f"{run_relative}/{name}" if run_relative else name
+        path = references / reference_file_name(artifact_path)
+        if not path.is_file():
+            problems.append(
+                f"{name}: no accepted numerical reference at {path}; "
+                "portability cannot be verified, so it is not asserted"
+            )
+            continue
+        try:
+            reference = read_reference(path)
+        except NumericReferenceError as exc:
+            problems.append(str(exc))
+            continue
+        problems.extend(compare_to_reference(directory / name, reference))
+    return tuple(sorted(set(problems)))
 
 
 def _expected_model_digest(
@@ -567,6 +709,21 @@ def _expected_model_digest(
             return entry.sha256
     recorded = _recorded_checksums(run_directory)
     return recorded.get(manifest.model_artifact_path)
+
+
+def _structure_digests(run_directory: Path) -> dict[str, str]:
+    """Structure digests of the run's CPU-dependent numerical documents.
+
+    Computed from the document itself rather than read from
+    ``checksums.json``: what is wanted is the exact, CPU-independent part
+    of the content, and ``checksums.json`` only records raw bytes.
+    """
+    digests: dict[str, str] = {}
+    for name in REFERENCED_NUMERIC_DOCUMENTS:
+        path = Path(run_directory) / name
+        if path.is_file():
+            digests[name] = structure_digest(path)
+    return digests
 
 
 def _recorded_checksums(run_directory: Path) -> dict[str, str]:
@@ -597,6 +754,8 @@ def summarise(manifest: ModelVersionManifest) -> str:
 __all__ = [
     "MANIFEST_SUFFIX",
     "REFERENCED_DOCUMENTS",
+    "REFERENCED_EXACT_DOCUMENTS",
+    "REFERENCED_NUMERIC_DOCUMENTS",
     "SOFTWARE_SELF_CHECK_BANNER",
     "ArtifactError",
     "ModelVersionError",
@@ -608,5 +767,6 @@ __all__ = [
     "read_model_version",
     "summarise",
     "verify_model_version",
+    "verify_model_version_portability",
     "write_model_versions",
 ]
