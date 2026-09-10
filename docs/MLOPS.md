@@ -559,13 +559,17 @@ propagates is the clock, or one machine's heap.
 
 ### Serialized model bytes are execution-specific
 
-A stage record has **three** classifications, not two:
+A stage record has **four** classifications, not two:
 
 | classification | in the record | checksummed | reaches `dvc.lock` |
 |---|---|---|---|
-| `portable_deterministic` | path + SHA-256 + size | yes | yes |
+| `portable_deterministic` | path + SHA-256 + size | yes, raw bytes | yes |
+| `cpu_dependent_numeric` | path + **structure** SHA-256 + reason + tolerance | structure only | yes, the structure digest |
 | `execution_specific` | path + reason | no, not here | no |
 | `volatile_provenance` | path + reason | no, anywhere | no |
+
+The second row is DEC-106 and is described below. The third row is
+DEC-105:
 
 The middle row exists because of a defect GitHub Actions found and local
 testing could not. `joblib.dump` writes scikit-learn's raw tree-node
@@ -596,15 +600,136 @@ serialized estimator in portable identity. Reintroducing one fails the unit
 tests immediately rather than a runner three weeks later.
 
 Classification is explicit, in
-`engagevr.mlops.stage_record` — `VOLATILE_ARTIFACT_REASONS` and
-`SERIALIZED_ESTIMATOR_SUFFIXES`. A file this repository has not classified
-is treated as **portable deterministic** and checksummed — so if it turns
-out to vary, the two-execution test fails loudly rather than the guarantee
-weakening in silence. Exclusion is always a named decision.
+`engagevr.mlops.stage_record` — `VOLATILE_ARTIFACT_REASONS`,
+`SERIALIZED_ESTIMATOR_SUFFIXES`, and `CPU_DEPENDENT_NUMERIC_REASONS`. A
+file this repository has not classified is treated as **portable
+deterministic** and checksummed — so if it turns out to vary, the
+two-execution test fails loudly rather than the guarantee weakening in
+silence. Exclusion is always a named decision.
 
-See DEC-105 for the full investigation, and `docs/LIMITATIONS.md` for the
-separate, unresolved question of numerical portability across CPU
-microarchitectures.
+See DEC-105 for the full investigation.
+
+### Model-derived numbers are CPU-dependent
+
+The question the previous section left to `docs/LIMITATIONS.md` is no
+longer open. CI run 34403534631 answered it: on a GitHub runner, ten
+artifacts differed from the committed lock, and seven of them belong to
+the `uncertainty` stage, **which persists no `.joblib` at all**. That
+cannot be pickle padding. It is arithmetic.
+
+numpy and scipy ship OpenBLAS built `DYNAMIC_ARCH`, which selects a kernel
+from the CPU it finds at run time. A different kernel accumulates a dot
+product in a different order, so a fitted coefficient differs in its last
+bits and everything derived from it follows. Forcing
+`OPENBLAS_CORETYPE=HASWELL` on the development machine reproduced the
+runner's `feature_importance.parquet` **byte for byte**, so this is
+demonstrated rather than inferred.
+
+What differs is **only the floating-point values**. Across three kernels
+and 76,896 values the worst absolute deviation is **1.0712e-08**, and the
+schema, column order, row order, dtypes, predicted labels, integer counts,
+identifiers, and missing-value positions are identical every time.
+
+So such an artifact is split rather than dropped:
+
+- **structure digest** — SHA-256 over the schema, ordering, dtypes, every
+  non-float value, and the positions of nulls and non-finite floats.
+  Floats contribute a token naming their kind, never their value. Exact,
+  portable, and what reaches `dvc.lock`.
+- **raw digest** — the real SHA-256 and size, in
+  `<name>.artifact-integrity.execution.json`, never DVC-declared, still
+  detecting corruption and tampering.
+- **numerical equivalence** — `engagevr numeric-check --reference R
+  --candidate C`, holding every float to `|a-b| <= 1e-6 + 1e-6*|b|` with
+  non-finite values compared exactly.
+
+Eight file names are classified, each observed to move in run
+34403534631: `metrics.json`, `predictions.parquet`,
+`feature_importance.parquet`, `selective_metrics.json`,
+`selective_predictions.parquet`, `thresholds.json`, `uncertainty.json`,
+`adaptation_gate.parquet`. `splits.json`, `calibration.json`,
+`ablations.json`, and `feature_catalog.json` are byte-identical on every
+kernel measured and stay portable deterministic.
+
+**Numerical identity is a comparison, not a digest,** and that is forced
+rather than chosen. Quantising floats and hashing them would put values on
+a grid that two one-ULP-apart values can straddle; with tens of thousands
+of floats a straddle is nearly certain, and the fingerprint would differ
+across machines for *some* runs. A hash has no notion of "close".
+
+**The tolerance is an engineering portability allowance.** It is 93x the
+worst measured deviation and no wider, because these artifacts report
+probabilities and scores to a handful of decimals. It is **not** a
+scientific uncertainty interval, not a confidence bound, and not evidence
+about any model. Nothing in this repository has been evaluated against a
+participant-provided label. No output file is rounded, quantised, or
+rewritten: the pipeline still writes full precision.
+
+Because the lock now carries no CPU-dependent value, `dvc.lock` is strict
+again and `git diff --exit-code -- dvc.lock` remains in CI unchanged.
+See DEC-106.
+
+### The accepted numerical reference
+
+Removing floats from identity also removes them from detection, and a
+check that compares two executions of the *same* runner catches nothing:
+both sides come from one CPU. Measured — mutating all 1,463 floats in
+`baseline/metrics.json`, structure untouched, left `dvc.lock`
+byte-identical and a same-runner comparison exiting zero. A result that
+moved from `0.72` to `0.91` passed every gate.
+
+So the accepted numbers are committed:
+
+```
+references/numeric/
+  MANIFEST.json                     SHA-256 of every reference file
+  experiments__baseline-engagement_class__metrics.json.reference.json
+  ...                               10 files, 25,632 accepted values
+```
+
+Each reference holds the structure digest and every **finite** float at
+full precision, in the canonical traversal order the structure digest
+also uses. Nothing is rounded: the tolerance lives in the comparison, not
+in the data.
+
+```
+engagevr numeric-reference            verify: present, unmodified, complete
+engagevr numeric-reference --update   ACCEPT new numbers (review the diff)
+engagevr numeric-check --accepted references/numeric --candidate <root>
+```
+
+`--accepted` is the **cross-environment** check: the numbers come from
+the repository revision, so a runner whose CPU produces materially
+different results fails no matter how self-consistent it is. `--reference
+<other root>` additionally compares two executions, which is
+same-environment agreement only, and the command says which claim it just
+supported.
+
+It fails closed, driven by the stage records rather than by the reference
+directory: a newly classified artifact with no accepted reference is an
+error, and so is a reference the pipeline no longer declares, one edited
+without being re-accepted, one listed and missing, and one present but
+unlisted.
+
+**Classification is by exact pipeline-relative path**, never by file
+name — ten paths, each observed to move in CI run 34403534631. A future
+artifact called `metrics.json` under a different stage or target is
+portable deterministic and fails loudly if it is not byte-stable.
+
+**The accepted reference set is authoritative for the tolerance.** `atol`
+and `rtol` are recorded as numbers in `MANIFEST.json`, in every
+reference, and in every stage record; all three must agree, and the
+running code's `DEFAULT_TOLERANCE` is checked against the manifest.
+`--atol`/`--rtol` are accepted with `--accepted` only when exactly equal
+to the committed values and refused otherwise, so the gate cannot be
+widened from the command line. Changing the tolerance means editing the
+code, re-running `numeric-reference --update`, and reviewing the diff.
+
+**Model version identity does not certify numerical portability.**
+`model_version_id` covers provenance, configuration, data, and code;
+structure digests cover schema and ordering; neither covers values. Use
+`verify_model_version_portability`, which invokes the reference
+comparison, when the numbers matter. See DEC-107.
 
 ### Where the wall clock went: execution sidecars
 

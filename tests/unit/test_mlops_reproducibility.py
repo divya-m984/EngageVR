@@ -163,15 +163,35 @@ class TestStageEntries:
         checksummed = {a.path for a in baseline.deterministic_artifacts}
         assert checksummed & volatile == set()
 
-    def test_metrics_and_splits_are_recorded_as_deterministic(
-        self, executed_pipeline
-    ) -> None:  # type: ignore[no-untyped-def]
+    def test_splits_is_recorded_as_byte_deterministic(self, executed_pipeline) -> None:  # type: ignore[no-untyped-def]
         layout, _parameters, stages = executed_pipeline
         entries = build_stage_entries(stages, layout)
         baseline = next(e for e in entries if e.name == "baseline")
         paths = {a.path for a in baseline.deterministic_artifacts}
-        for name in ("metrics.json", "splits.json"):
-            assert any(path.endswith(f"/{name}") for path in paths), name
+        assert any(path.endswith("/splits.json") for path in paths)
+
+    def test_metrics_is_recorded_as_cpu_dependent_numeric(
+        self, executed_pipeline
+    ) -> None:  # type: ignore[no-untyped-def]
+        # DEC-106. metrics.json is still recorded and still pinned — by
+        # its structure digest, which is exact — but not by its raw
+        # bytes, which follow the CPU's BLAS kernel. It has not been
+        # dropped from the manifest; it has changed class.
+        layout, _parameters, stages = executed_pipeline
+        entries = build_stage_entries(stages, layout)
+        baseline = next(e for e in entries if e.name == "baseline")
+        exact = {a.path for a in baseline.deterministic_artifacts}
+        numeric = {a.path for a in baseline.cpu_dependent_numeric_artifacts}
+        assert not any(path.endswith("/metrics.json") for path in exact)
+        [recorded] = [
+            a
+            for a in baseline.cpu_dependent_numeric_artifacts
+            if a.path.endswith("/metrics.json")
+        ]
+        assert len(recorded.structure_sha256) == 64
+        assert recorded.excluded_from_portable_identity
+        assert recorded.numeric_tolerance
+        assert exact & numeric == set()
 
     def test_model_binaries_are_listed_execution_specific_not_checksummed(
         self,

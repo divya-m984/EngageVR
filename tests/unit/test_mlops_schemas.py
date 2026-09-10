@@ -163,7 +163,13 @@ def drift_report(**overrides: object) -> DriftReport:
 
 class TestSchemaVersioning:
     def test_the_current_version_is_supported(self) -> None:
-        assert assert_supported_schema_version(MLOPS_SCHEMA_VERSION) == "1.0"
+        assert assert_supported_schema_version(MLOPS_SCHEMA_VERSION) == "1.1"
+
+    def test_the_previous_version_is_still_readable(self) -> None:
+        # 1.1 adds the cpu_dependent_numeric class (DEC-106). A 1.0
+        # document predates it, and reading it as "no artifacts in that
+        # class" is the truthful interpretation rather than a guess.
+        assert assert_supported_schema_version("1.0") == "1.0"
 
     def test_a_future_version_is_refused_rather_than_partially_read(self) -> None:
         with pytest.raises(UnsupportedMLOpsSchemaError, match="not supported"):

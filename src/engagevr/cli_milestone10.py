@@ -6,6 +6,8 @@
     model-manifest  derive immutable, checksum-linked model versions
     drift-check     distribution-shift diagnostic between two datasets
     mlflow-log      log a finished run to a LOCAL MLflow store
+    numeric-check   verify numerical portability against accepted results
+    numeric-reference  record or verify the ACCEPTED numerical results
     repro-manifest  build the reproducibility manifest for a pipeline
     system-smoke    the integrated software self-check
 
@@ -26,8 +28,10 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from engagevr.config import EngageVRConfig
+from engagevr.mlops.numeric_reference import REFERENCE_DIRECTORY
 from engagevr.mlops.pipeline import STAGE_NAMES
 from engagevr.schemas.experiments import SOFTWARE_SELF_CHECK_BANNER
 from engagevr.schemas.mlops import NO_INFLATION_NOTE
@@ -230,6 +234,118 @@ def add_parsers(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> Non
         ),
     )
 
+    numeric = sub.add_parser(
+        "numeric-check",
+        help="Compare two pipeline roots under the numerical portability contract.",
+        description=(
+            "The cross-environment half of the reproducibility check. "
+            "Artifacts declared byte-deterministic must be IDENTICAL. "
+            "Artifacts declared cpu-dependent numeric must have an "
+            "identical STRUCTURE — schema, column and row order, dtypes, "
+            "every non-float value, every predicted label, and every "
+            "missing and non-finite position — and floating-point values "
+            "agreeing within a declared engineering portability tolerance. "
+            "Anything unclassified that differs is a failure: the check "
+            "fails closed. A tolerance here is a portability allowance, "
+            "never a scientific uncertainty interval and never evidence "
+            "about a model."
+        ),
+    )
+    numeric.add_argument(
+        "--reference",
+        type=str,
+        default=None,
+        help=(
+            "Pipeline root produced by another execution. Compares two "
+            "executions against each other. On its own this proves only "
+            "SAME-ENVIRONMENT agreement: two runs on one machine can be "
+            "wrong together. Use --accepted for the cross-environment check."
+        ),
+    )
+    numeric.add_argument(
+        "--accepted",
+        type=str,
+        nargs="?",
+        const=str(REFERENCE_DIRECTORY),
+        default=None,
+        help=(
+            "Compare against the COMMITTED accepted numerical references "
+            f"(default: {REFERENCE_DIRECTORY}). This is the "
+            "cross-environment check: the accepted numbers are a property "
+            "of the repository revision, not of the machine running the "
+            "check."
+        ),
+    )
+    numeric.add_argument(
+        "--candidate",
+        type=str,
+        required=True,
+        help="Pipeline root produced by the execution under test.",
+    )
+    numeric.add_argument(
+        "--target",
+        type=str,
+        default=None,
+        help="Target the pipeline modelled. Defaults to params.yaml.",
+    )
+    numeric.add_argument(
+        "--atol",
+        type=float,
+        default=None,
+        help=(
+            "Absolute tolerance. Defaults to the declared portability "
+            "tolerance; widening it is a deliberate, visible act."
+        ),
+    )
+    numeric.add_argument(
+        "--rtol",
+        type=float,
+        default=None,
+        help="Relative tolerance. Defaults to the declared value.",
+    )
+
+    reference = sub.add_parser(
+        "numeric-reference",
+        help="Record or verify the ACCEPTED numerical results of the pipeline.",
+        description=(
+            "The accepted numbers this repository compares fresh executions "
+            "against. Without --update the command VERIFIES: every "
+            "cpu-dependent numerical artifact the pipeline declares must "
+            "have a committed reference, and every reference must match its "
+            "recorded SHA-256. With --update it REWRITES them from the "
+            "current pipeline output, which is an act of acceptance: the "
+            "new numbers should be reviewed in the diff before being "
+            "committed. Reproducing a reference shows the software is "
+            "portable; it is not evidence that any number is correct."
+        ),
+    )
+    reference.add_argument(
+        "--pipeline-root",
+        type=str,
+        default=None,
+        help="Pipeline root to read. Defaults to mlops.pipeline_root.",
+    )
+    reference.add_argument(
+        "--directory",
+        type=str,
+        default=str(REFERENCE_DIRECTORY),
+        help=f"Where the references live. Defaults to {REFERENCE_DIRECTORY}.",
+    )
+    reference.add_argument(
+        "--target",
+        type=str,
+        default=None,
+        help="Target the pipeline modelled. Defaults to params.yaml.",
+    )
+    reference.add_argument(
+        "--update",
+        action="store_true",
+        help=(
+            "Rewrite the references from the current pipeline output. "
+            "Accepting new numbers, not observing them."
+        ),
+    )
+
     record = sub.add_parser(
         "stage-record",
         help="Write the deterministic record for one executed pipeline stage.",
@@ -412,6 +528,15 @@ def run_stage_record(args: argparse.Namespace) -> int:
     print(f"Stage:                  {record.stage_name} ({record.stage_kind})")
     print(f"Logical identity:       {record.logical_identity}")
     print(f"Portable deterministic: {len(record.deterministic_artifacts):>4}")
+    print(f"CPU-dependent numeric:  {len(record.cpu_dependent_numeric_artifacts):>4}")
+    for numeric in record.cpu_dependent_numeric_artifacts:
+        print(f"  {numeric.path}")
+        print(f"      structure pinned: {numeric.structure_sha256[:16]}...")
+    if record.cpu_dependent_numeric_artifacts:
+        print(
+            f"      raw digests recorded in {integrity_path.name}; floats "
+            "held to a declared tolerance by comparison, not by a hash."
+        )
     print(f"Execution-specific:     {len(record.execution_specific_artifacts):>4}")
     for path in record.execution_specific_artifacts:
         print(f"  {path}")
@@ -756,6 +881,309 @@ def run_mlflow_log(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# numeric-check
+# ---------------------------------------------------------------------------
+
+
+def run_numeric_check(args: argparse.Namespace) -> int:
+    """Compare two pipeline roots under the numerical portability contract.
+
+    Three tests, and each one can fail the command:
+
+    1. every artifact declared byte-deterministic is byte-identical;
+    2. every artifact declared cpu-dependent numeric has an identical
+       structure digest;
+    3. every float in those artifacts agrees within the tolerance.
+
+    An artifact that the reference classified and the candidate lacks —
+    or that either side cannot read — is a failure rather than a skipped
+    row.  The check reports what it could not check.
+    """
+    from engagevr.mlops.numeric_contract import (
+        DEFAULT_TOLERANCE,
+        NumericContractError,
+        NumericTolerance,
+        compare_artifacts,
+        structure_digest,
+    )
+    from engagevr.mlops.numeric_reference import (
+        NumericReferenceError,
+        check_against_references,
+        manifest_tolerance,
+        read_manifest,
+    )
+    from engagevr.mlops.pipeline import build_stages, default_layout, load_parameters
+    from engagevr.mlops.stage_record import read_stage_record
+    from engagevr.training.artifacts import sha256_file
+
+    parameters = load_parameters()
+    target = args.target or parameters.target
+    reference_root = Path(args.reference) if args.reference else None
+    candidate_root = Path(args.candidate)
+    tolerance = NumericTolerance(
+        atol=DEFAULT_TOLERANCE.atol if args.atol is None else args.atol,
+        rtol=DEFAULT_TOLERANCE.rtol if args.rtol is None else args.rtol,
+    )
+
+    layout = default_layout(candidate_root, target)
+    stages = build_stages(layout, parameters.model_copy(update={"target": target}))
+
+    if args.reference is None and args.accepted is None:
+        print(
+            "Error: nothing to compare against. Pass --accepted for the "
+            "cross-environment check against the committed references, "
+            "--reference to compare two executions, or both.",
+            file=sys.stderr,
+        )
+        return 2
+
+    failures: list[str] = []
+    exact_checked = 0
+    numeric_checked = 0
+    accepted_checked = 0
+    declared: list[Any] = []
+
+    for stage in stages:
+        if stage.record is None or not stage.record.is_file():
+            continue
+        try:
+            record = read_stage_record(stage.record)
+        except (OSError, ValueError) as exc:
+            failures.append(f"{stage.name}: unreadable stage record ({exc})")
+            continue
+        declared.extend(record.cpu_dependent_numeric_artifacts)
+        if reference_root is None:
+            continue
+        for artifact in record.deterministic_artifacts:
+            left = reference_root / artifact.path
+            right = candidate_root / artifact.path
+            if not left.is_file() or not right.is_file():
+                failures.append(
+                    f"{artifact.path}: declared byte-deterministic but missing "
+                    "on one side"
+                )
+                continue
+            exact_checked += 1
+            if sha256_file(left) != sha256_file(right):
+                failures.append(
+                    f"{artifact.path}: declared byte-deterministic but the "
+                    "bytes differ. This is not a tolerance question — the "
+                    "artifact is either misclassified or genuinely changed."
+                )
+        for numeric in record.cpu_dependent_numeric_artifacts:
+            left = reference_root / numeric.path
+            right = candidate_root / numeric.path
+            if not left.is_file() or not right.is_file():
+                failures.append(
+                    f"{numeric.path}: declared cpu-dependent numeric but "
+                    "missing on one side"
+                )
+                continue
+            numeric_checked += 1
+            try:
+                if structure_digest(left) != structure_digest(right):
+                    failures.append(
+                        f"{numeric.path}: structure differs (schema, ordering, "
+                        "dtypes, non-float values, labels, or missing-value "
+                        "positions). No tolerance covers this."
+                    )
+                    continue
+                differences = compare_artifacts(left, right, tolerance=tolerance)
+            except NumericContractError as exc:
+                failures.append(f"{numeric.path}: unreadable ({exc})")
+                continue
+            for difference in differences:
+                failures.append(f"{numeric.path}: {difference}")
+
+    # The cross-environment half. The accepted numbers come from the
+    # repository, so two wrong executions on one runner cannot agree
+    # their way past this.
+    if args.accepted is not None:
+        # The accepted reference set is authoritative for the tolerance.
+        # A caller-supplied --atol/--rtol is passed through only so it can
+        # be REFUSED when it differs; it can never widen the gate.
+        requested = (
+            tolerance if (args.atol is not None or args.rtol is not None) else None
+        )
+        try:
+            problems, accepted_checked = check_against_references(
+                candidate_root,
+                Path(args.accepted),
+                declared,
+                tolerance=requested,
+            )
+        except NumericReferenceError as exc:
+            print(_MLOPS_BANNER)
+            print()
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        failures.extend(problems)
+
+    # When --accepted is used the ACCEPTED tolerance is what governed the
+    # comparison, so that is what gets reported. Printing the requested
+    # one would describe a contract that was not applied.
+    effective = tolerance
+    if args.accepted is not None:
+        try:
+            effective = manifest_tolerance(read_manifest(Path(args.accepted)))
+        except NumericReferenceError:
+            pass
+
+    print(_MLOPS_BANNER)
+    print()
+    print(f"Candidate root:         {candidate_root}")
+    if reference_root is not None:
+        print(f"Other execution:        {reference_root}")
+    if args.accepted is not None:
+        print(f"Accepted references:    {args.accepted}")
+    print(f"Tolerance:              {effective.describe()}")
+    print(f"Byte-identical checked: {exact_checked}")
+    print(f"Numerically  checked:   {numeric_checked}")
+    print(f"Against accepted:       {accepted_checked}")
+    print()
+    # Failures are reported before the nothing-compared guard: a refused
+    # tolerance override stops the comparison, and reporting that as
+    # "nothing was compared" would hide why.
+    if failures:
+        print(f"FAILED: {len(failures)} difference(s).", file=sys.stderr)
+        for failure in failures:
+            print(f"  - {failure}", file=sys.stderr)
+        return 1
+    if exact_checked == 0 and numeric_checked == 0 and accepted_checked == 0:
+        print(
+            "Error: nothing was compared. The candidate root must hold an "
+            "executed pipeline with deterministic stage records.",
+            file=sys.stderr,
+        )
+        return 2
+    if args.accepted is not None:
+        print(
+            "Numerical portability holds against the ACCEPTED references: "
+            "every cpu-dependent numerical artifact has the structure this "
+            "repository committed and every float agrees within the "
+            "declared tolerance."
+        )
+    else:
+        print(
+            "The two executions agree. NOTE: this is same-environment "
+            "agreement only — it does not establish cross-environment "
+            "portability. Pass --accepted for that."
+        )
+    print()
+    print(
+        "This is a SOFTWARE portability result on SYNTHETIC data. It is not "
+        "evidence that any model is accurate, calibrated, or valid."
+    )
+    print(NO_INFLATION_NOTE)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# numeric-reference
+# ---------------------------------------------------------------------------
+
+
+def run_numeric_reference(args: argparse.Namespace) -> int:
+    """Record or verify the accepted numerical results."""
+    from engagevr.mlops.numeric_reference import (
+        NumericReferenceError,
+        build_reference,
+        read_reference,
+        reference_file_name,
+        verify_manifest,
+        write_manifest,
+        write_reference,
+    )
+    from engagevr.mlops.pipeline import build_stages, default_layout, load_parameters
+    from engagevr.mlops.stage_record import read_stage_record
+
+    config = _config()
+    parameters = load_parameters()
+    target = args.target or parameters.target
+    root = Path(args.pipeline_root or config.mlops.pipeline_root)
+    directory = Path(args.directory)
+    layout = default_layout(root, target)
+    stages = build_stages(layout, parameters.model_copy(update={"target": target}))
+
+    declared: list[str] = []
+    for stage in stages:
+        if stage.record is None or not stage.record.is_file():
+            continue
+        try:
+            record = read_stage_record(stage.record)
+        except (OSError, ValueError) as exc:
+            print(
+                f"Error: {stage.name} has no readable record ({exc})", file=sys.stderr
+            )
+            return 1
+        declared.extend(a.path for a in record.cpu_dependent_numeric_artifacts)
+    declared.sort()
+
+    print(_MLOPS_BANNER)
+    print()
+
+    if args.update:
+        directory.mkdir(parents=True, exist_ok=True)
+        for stale in sorted(directory.glob("*.reference.json")):
+            stale.unlink()
+        written = 0
+        for artifact_path in declared:
+            try:
+                reference = build_reference(root / artifact_path, artifact_path)
+            except (NumericReferenceError, ValueError) as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+            write_reference(reference, directory)
+            written += 1
+            print(f"  accepted {artifact_path} ({reference.value_count} values)")
+        write_manifest(directory, target=target)
+        print()
+        print(f"Wrote {written} accepted reference(s) and {directory}/MANIFEST.json.")
+        print(
+            "These numbers are now what every future execution is compared "
+            "against. Review the diff before committing: updating a "
+            "reference ACCEPTS a change, it does not observe one."
+        )
+        return 0
+
+    problems = []
+    try:
+        problems.extend(verify_manifest(directory))
+    except NumericReferenceError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    checked = 0
+    for artifact_path in declared:
+        path = directory / reference_file_name(artifact_path)
+        if not path.is_file():
+            problems.append(
+                f"{artifact_path}: classified cpu-dependent numeric but has "
+                "no accepted reference"
+            )
+            continue
+        try:
+            read_reference(path)
+        except NumericReferenceError as exc:
+            problems.append(str(exc))
+            continue
+        checked += 1
+
+    print(f"Pipeline root:          {root}")
+    print(f"Reference directory:    {directory}")
+    print(f"Declared cpu-numeric:   {len(declared)}")
+    print(f"References verified:    {checked}")
+    print()
+    if problems:
+        print(f"FAILED: {len(problems)} problem(s).", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+    print("Every declared cpu-dependent numerical artifact has an accepted")
+    print("reference, and every reference matches its recorded SHA-256.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # repro-manifest
 # ---------------------------------------------------------------------------
 
@@ -819,7 +1247,8 @@ def run_repro_manifest(args: argparse.Namespace) -> int:
     for stage in manifest.stages:
         print(
             f"  {stage.name:<20} {stage.kind:<16} "
-            f"deterministic={len(stage.deterministic_artifacts):<4} "
+            f"exact={len(stage.deterministic_artifacts):<4} "
+            f"cpu_numeric={len(stage.cpu_dependent_numeric_artifacts):<4} "
             f"volatile={len(stage.volatile_artifacts)}"
         )
         print(f"      identity: {stage.logical_identity}")
@@ -909,6 +1338,8 @@ __all__ = [
     "run_mlflow_log",
     "run_mlops_demo",
     "run_model_manifest",
+    "run_numeric_check",
+    "run_numeric_reference",
     "run_repro_manifest",
     "run_stage_record",
     "run_system_smoke_command",

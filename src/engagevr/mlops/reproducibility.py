@@ -10,8 +10,17 @@ so it has to obey the rule it describes.
 What is in the identity
 -----------------------
 Stage names, kinds, commands, logical identities (a dataset fingerprint,
-a run id, a report fingerprint), and the pipeline-relative path plus
-SHA-256 of every artifact declared deterministic.
+a run id, a report fingerprint), the pipeline-relative path plus SHA-256
+of every artifact declared byte-deterministic, and the pipeline-relative
+path plus **structure** SHA-256 of every artifact declared CPU-dependent
+numeric.
+
+The manifest reports those two as separate things and never conflates
+them.  Byte reproducibility is a claim about bytes; numerical
+portability is a claim about structure being exact and floats agreeing
+within a declared tolerance.  Calling the second one "byte
+reproducibility" would overstate what this pipeline can demonstrate on a
+machine whose CPU it has never seen.  See DEC-106.
 
 What is not, by construction
 ----------------------------
@@ -25,6 +34,12 @@ uninitialised struct padding and the library build that wrote it, so its
 digest identifies one execution rather than the experiment; it is
 recorded in an artifact-integrity execution sidecar instead.  See
 DEC-105 and :mod:`engagevr.mlops.stage_record`.
+
+Nor the **raw** SHA-256, or the size, of any CPU-dependent numerical
+artifact.  Both follow the CPU's BLAS kernel: a one-ULP change alters a
+float's decimal rendering, so even the file size moves.  The exact
+structure digest participates instead, and the raw digest is recorded in
+the same artifact-integrity sidecar.  See DEC-106.
 
 When the manifest was built is recorded in
 ``reproducibility.execution.json`` beside it, which is never a DVC output.
@@ -152,6 +167,9 @@ def build_stage_entries(
                     command=record.command,
                     logical_identity=record.logical_identity,
                     deterministic_artifacts=record.deterministic_artifacts,
+                    cpu_dependent_numeric_artifacts=(
+                        record.cpu_dependent_numeric_artifacts
+                    ),
                     execution_specific_artifacts=record.execution_specific_artifacts,
                     volatile_artifacts=record.volatile_artifacts,
                 )
@@ -165,6 +183,7 @@ def build_stage_entries(
                 command=stage.command,
                 logical_identity=_direct_identity(stage, layout),
                 deterministic_artifacts=classification.deterministic,
+                cpu_dependent_numeric_artifacts=classification.cpu_numeric,
                 execution_specific_artifacts=classification.execution_specific,
                 volatile_artifacts=classification.volatile,
             )
@@ -173,7 +192,16 @@ def build_stage_entries(
 
 
 def logical_fingerprint(stages: Sequence[ReproducibilityStage]) -> str:
-    """SHA-256 over stage identities and deterministic checksums."""
+    """SHA-256 over stage identities, exact checksums, and structure digests.
+
+    Two kinds of digest participate, and the manifest keeps them apart in
+    its own fields: the **raw** SHA-256 of every byte-deterministic
+    artifact, and the **structure** SHA-256 of every CPU-dependent
+    numerical one.  The second is exact and portable — it covers schema,
+    ordering, dtypes, non-float values, labels, and null positions — so a
+    real change to any of those still moves the fingerprint.  What no
+    longer moves it is a last-bit difference in a float.
+    """
     payload = [
         {
             "name": stage.name,
@@ -183,6 +211,10 @@ def logical_fingerprint(stages: Sequence[ReproducibilityStage]) -> str:
             "deterministic_artifacts": [
                 (artifact.path, artifact.sha256)
                 for artifact in stage.deterministic_artifacts
+            ],
+            "cpu_dependent_numeric_artifacts": [
+                (artifact.path, artifact.structure_sha256)
+                for artifact in stage.cpu_dependent_numeric_artifacts
             ],
         }
         for stage in stages
@@ -290,6 +322,30 @@ def _artifact_differences(
         elif first.sha256 != second.sha256:
             differences.append(
                 f"stage {name!r}: deterministic artifact {path!r} has different bytes"
+            )
+
+    def structures(stage: ReproducibilityStage) -> dict[str, str]:
+        return {
+            artifact.path: artifact.structure_sha256
+            for artifact in stage.cpu_dependent_numeric_artifacts
+        }
+
+    left_structures = structures(left)
+    right_structures = structures(right)
+    for path in sorted(set(left_structures) | set(right_structures)):
+        if path not in left_structures or path not in right_structures:
+            differences.append(
+                f"stage {name!r}: {path!r} is classified cpu-dependent numeric "
+                "in only one manifest"
+            )
+        elif left_structures[path] != right_structures[path]:
+            # Structure, not bytes: the schema, ordering, dtypes, labels,
+            # or null positions changed. A float difference cannot reach
+            # here, which is the point.
+            differences.append(
+                f"stage {name!r}: cpu-dependent numeric artifact {path!r} has "
+                "a different structure (schema, ordering, dtypes, non-float "
+                "values, or missing-value positions)"
             )
     return differences
 

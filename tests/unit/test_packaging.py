@@ -462,6 +462,33 @@ class TestContinuousIntegration:
         assert "sha256sum dvc.lock" in smoke
         assert "git diff --exit-code -- dvc.lock" in smoke
 
+    def test_ci_compares_against_the_committed_accepted_references(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        # The cross-environment numerical gate. Without --accepted the
+        # check compares the runner against itself, and two executions on
+        # one CPU can be wrong together: measured, mutating every float in
+        # metrics.json left dvc.lock byte-identical and a same-runner
+        # comparison exited zero. See DEC-107.
+        smoke = " ".join(workflow_steps(jobs["smoke"]))
+        assert "numeric-check" in smoke
+        assert "--accepted references/numeric" in smoke, (
+            "CI must hold the runner to the COMMITTED accepted numbers, not "
+            "to another execution of itself"
+        )
+
+    def test_ci_verifies_the_accepted_references_are_unmodified(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        smoke = " ".join(workflow_steps(jobs["smoke"]))
+        assert "numeric-reference" in smoke
+
+    def test_ci_still_verifies_raw_artifact_integrity(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        smoke = " ".join(workflow_steps(jobs["smoke"]))
+        assert "artifact-integrity.execution.json" in smoke
+
     def test_ci_runs_the_two_source_tree_proof(self, jobs: dict[str, Any]) -> None:
         smoke = " ".join(workflow_steps(jobs["smoke"]))
         assert "ENGAGEVR_RUN_DVC_SYSTEM_TESTS=1" in smoke

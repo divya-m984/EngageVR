@@ -33,10 +33,14 @@ from engagevr.schemas.experiments import (
 )
 
 #: Version of every structured document defined in this module.
-MLOPS_SCHEMA_VERSION = "1.0"
+#:
+#: 1.1 adds the ``cpu_dependent_numeric`` classification (DEC-106). A 1.0
+#: document is still readable: the new field defaults to empty, which is
+#: the truthful reading of a record written before the class existed.
+MLOPS_SCHEMA_VERSION = "1.1"
 
 #: Schema versions this build knows how to read.
-SUPPORTED_MLOPS_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0"})
+SUPPORTED_MLOPS_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0", "1.1"})
 
 #: Words that would turn bookkeeping into an endorsement.
 #:
@@ -142,6 +146,35 @@ EXECUTION_SPECIFIC_NOTE = (
     "created, still checksummed, and still tamper-checked — in an "
     "<name>.artifact-integrity.execution.json record beside the "
     "deterministic document, which is never a DVC-declared output."
+)
+
+#: Why a model-derived numerical artifact's *bytes* are not portable.
+#:
+#: Measured, not assumed, and predicted in advance: DEC-105 recorded that
+#: changing only the OpenBLAS kernel changed ``metrics.json``,
+#: ``predictions.parquet``, and ``feature_importance.parquet``, and said
+#: that if a runner's CPU ever produced different numbers the lock check
+#: would fail loudly.  On PR #10 it did.  numpy and scipy ship OpenBLAS
+#: built ``DYNAMIC_ARCH``, which picks a kernel from the CPU it finds at
+#: run time; a different kernel accumulates a dot product in a different
+#: order, and the last bits of every derived number follow.
+#:
+#: What differs is *only the floating-point values*.  The schema, the
+#: column and row order, the dtypes, the predicted labels, the integer
+#: counts, and the positions of missing and non-finite values are
+#: identical across CPUs, and are still pinned exactly by a structure
+#: digest.  See :mod:`engagevr.mlops.numeric_contract` and DEC-106.
+CPU_DEPENDENT_NUMERIC_NOTE = (
+    "CPU-DEPENDENT NUMERICAL ARTIFACT. Its structure is portable and is "
+    "pinned exactly by structure_sha256; its floating-point values follow "
+    "the CPU that produced them, because numpy and scipy ship OpenBLAS "
+    "built DYNAMIC_ARCH and a different kernel sums in a different order. "
+    "The raw SHA-256 of the real bytes is still recorded, in the "
+    "<name>.artifact-integrity.execution.json record beside the "
+    "deterministic document, where it still detects corruption and "
+    "tampering. Numerical agreement is checked by comparison against a "
+    "reference under a declared engineering portability tolerance — never "
+    "by a digest, because a hash has no notion of 'close'."
 )
 
 #: Repeated on every artifact-integrity record.
@@ -445,6 +478,248 @@ class DeterministicArtifact(BaseModel):
         return self
 
 
+class CpuDependentNumericArtifact(BaseModel):
+    """One file whose structure is portable but whose floats follow the CPU.
+
+    The fourth classification (DEC-106).  It exists so that an artifact
+    whose numbers move in the last bits between two CPUs is neither
+    falsely pinned by a raw checksum nor quietly dropped from the record.
+
+    ``structure_sha256`` covers the artifact's exact non-floating
+    content — schema, ordering, dtypes, every non-float value, and the
+    positions of nulls and non-finite floats — and is derived
+    **separately from the raw bytes**.  It does not replace the raw
+    digest, which stays in the artifact-integrity sidecar.
+
+    There is deliberately **no size field**.  A one-ULP change in a float
+    changes its decimal rendering length, so the file size of one of
+    these artifacts is as CPU-dependent as its bytes: the observed
+    ``metrics.json`` was 198,598 bytes on one machine and 198,605 on
+    another.  Recording it here would put a machine fact back into a
+    portable identity, which is the defect this class removes.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    path: str = Field(description="Path relative to the pipeline root.")
+    structure_sha256: str = Field(
+        min_length=64,
+        max_length=64,
+        description=(
+            "SHA-256 over the artifact's exact CPU-independent content. "
+            "Never the digest of the raw bytes, and never a digest of "
+            "rounded values: rounding puts values on a grid, and two "
+            "values one ULP apart can straddle a grid boundary."
+        ),
+    )
+    excluded_from_portable_identity: str = Field(
+        min_length=1,
+        description="Why the raw byte digest is not part of portable identity.",
+    )
+    atol: float = Field(
+        gt=0.0,
+        description=(
+            "Absolute half of the portability tolerance, structurally. "
+            "Recorded as a number rather than only as prose so that a "
+            "mismatch between this record and the accepted reference set "
+            "is a comparison a test can make, not a sentence a reader has "
+            "to notice."
+        ),
+    )
+    rtol: float = Field(gt=0.0, description="Relative half of the tolerance.")
+    numeric_tolerance: str = Field(
+        min_length=1,
+        description=(
+            "Human-readable rendering of the same tolerance. Not a "
+            "scientific uncertainty interval and not evidence about model "
+            "validity."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        assert_relative_path(self.path, field="path")
+        if not _SHA256.match(self.structure_sha256):
+            raise ValueError("structure_sha256 must be a lowercase SHA-256 digest")
+        if not (math.isfinite(self.atol) and math.isfinite(self.rtol)):
+            raise ValueError("atol and rtol must be finite")
+        if is_serialized_estimator(self.path):
+            raise ValueError(
+                f"{self.path!r} is a serialized Python estimator. Its bytes "
+                "are execution-specific (DEC-105), not CPU-dependent "
+                "numerical content: it has no readable structure to digest "
+                "and belongs in execution_specific_artifacts."
+            )
+        return self
+
+
+class NumericReference(_VersionedDocument):
+    """The accepted numerical result of one CPU-dependent artifact.
+
+    Why this exists
+    ---------------
+    The structure digest deliberately excludes floating-point *values*, so
+    two executions whose numbers differ grossly still agree on it.  That
+    is correct for identity and useless for detection: if the only
+    numerical check compares two executions of the *same* machine, both
+    can be wrong together and every gate passes.  Measured on this
+    repository: mutating 1,463 floats in ``metrics.json`` left
+    ``dvc.lock`` byte-identical and a same-runner comparison exited zero.
+
+    So the accepted numbers are committed to the repository, and a fresh
+    execution anywhere is compared against **them** rather than against
+    itself.  This document is that record: version-controlled, checksummed
+    in ``MANIFEST.json``, and therefore tied to a repository revision
+    rather than to whatever a runner happened to produce ten minutes ago.
+
+    What it holds
+    -------------
+    ``structure_sha256`` pins everything exact — schema, ordering, dtypes,
+    non-float values, labels, and the positions of missing and non-finite
+    entries.  ``values`` holds the finite floats in the canonical
+    traversal order that the structure digest also uses, so a matching
+    structure guarantees the two sequences correspond element for element.
+
+    Non-finite values are absent on purpose: a NaN or an infinity is
+    already pinned exactly by the structure digest, and JSON has no
+    portable spelling for either.
+
+    This is an accepted engineering baseline for a SYNTHETIC software
+    self-check.  It is not a validated result, not a benchmark, and not
+    evidence about any model.
+    """
+
+    artifact_path: str = Field(
+        description="Path of the artifact, relative to the pipeline root."
+    )
+    structure_sha256: str = Field(min_length=64, max_length=64)
+    value_count: int = Field(ge=0)
+    values: tuple[float, ...] = Field(
+        default=(),
+        description=(
+            "Every FINITE float, in the canonical traversal order: sorted "
+            "keys depth-first for JSON, column-then-row for parquet. "
+            "Full precision — nothing here is rounded or quantised."
+        ),
+    )
+    value_order: str = Field(
+        default=(
+            "JSON: depth-first with dictionary keys sorted. Parquet: column "
+            "order, then row order, descending into list-valued cells. The "
+            "same traversal the structure digest uses, so a matching "
+            "structure digest makes these values positionally comparable."
+        ),
+    )
+    atol: float = Field(
+        gt=0.0,
+        description=(
+            "Absolute half of the tolerance this reference was accepted "
+            "under. THE ACCEPTED REFERENCE SET IS AUTHORITATIVE: a "
+            "comparison uses this value, not whatever the running code "
+            "happens to default to, so the contract cannot be widened "
+            "without editing the committed reference."
+        ),
+    )
+    rtol: float = Field(gt=0.0, description="Relative half of the tolerance.")
+    numeric_tolerance: str = Field(min_length=1)
+
+    is_synthetic: bool = True
+    scientific_evaluation_eligible: bool = False
+    disclaimers: tuple[str, ...] = ()
+    note: str = (
+        "ACCEPTED NUMERICAL REFERENCE for a SYNTHETIC software self-check. "
+        "It records the numbers this repository accepts as correct for "
+        "cross-environment comparison. It is NOT a validated result, NOT a "
+        "benchmark, and NOT evidence that any model is accurate or "
+        "calibrated. Reproducing it means the software is portable, not "
+        "that anything it computes is true."
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        assert_relative_path(self.artifact_path, field="artifact_path")
+        if not _SHA256.match(self.structure_sha256):
+            raise ValueError("structure_sha256 must be a lowercase SHA-256 digest")
+        if self.value_count != len(self.values):
+            raise ValueError(
+                f"value_count is {self.value_count} but {len(self.values)} "
+                "values are recorded; a truncated reference would silently "
+                "check fewer numbers than it claims"
+            )
+        if not (math.isfinite(self.atol) and math.isfinite(self.rtol)):
+            raise ValueError("atol and rtol must be finite")
+        for value in self.values:
+            if not math.isfinite(value):
+                raise ValueError(
+                    "a numeric reference holds finite values only; a NaN or "
+                    "an infinity is pinned exactly by the structure digest"
+                )
+        if self.scientific_evaluation_eligible:
+            raise ValueError(
+                "an accepted numerical reference can never be scientifically "
+                "eligible: reproducing a number is not validating it"
+            )
+        return self
+
+
+class NumericReferenceManifest(_VersionedDocument):
+    """The exact checksums of the accepted numerical references.
+
+    The references are the thing CI trusts, so they need their own
+    tamper-evidence.  Each entry is the SHA-256 of one reference document
+    exactly as committed; a reference edited without updating this file —
+    or listed here and missing from the tree — fails the check rather than
+    being read anyway.
+
+    Unlike the artifacts it describes, this document and every reference
+    it names **are** byte-deterministic: they are committed text, not
+    something a CPU recomputes.
+    """
+
+    target: str = Field(min_length=1)
+    references: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Reference file name to the SHA-256 of its bytes. Every "
+            "cpu-dependent numerical artifact the pipeline declares must "
+            "appear; one that does not fails the check closed."
+        ),
+    )
+    atol: float = Field(
+        gt=0.0,
+        description=(
+            "Absolute half of the accepted portability tolerance. This "
+            "manifest is the single authority: every reference it names, "
+            "every stage record, and the running code must agree with it, "
+            "and changing it is a deliberate repository contract change."
+        ),
+    )
+    rtol: float = Field(gt=0.0, description="Relative half of the tolerance.")
+    numeric_tolerance: str = Field(min_length=1)
+    note: str = (
+        "Accepted numerical references for a SYNTHETIC software self-check. "
+        "Reproducing them demonstrates cross-environment numerical "
+        "portability of the software. It is not evidence of model accuracy, "
+        "calibration, or validity."
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if not (math.isfinite(self.atol) and math.isfinite(self.rtol)):
+            raise ValueError("atol and rtol must be finite")
+        for name, digest in self.references.items():
+            if not _SHA256.match(digest):
+                raise ValueError(
+                    f"references[{name!r}] must be a lowercase SHA-256 digest"
+                )
+            if "/" in name or "\\" in name:
+                raise ValueError(
+                    f"references[{name!r}] must be a bare file name; the "
+                    "manifest sits beside the references it names"
+                )
+        return self
+
+
 class DeterministicStageRecord(_VersionedDocument):
     """The DVC-declared, byte-stable representation of one pipeline stage.
 
@@ -490,6 +765,17 @@ class DeterministicStageRecord(_VersionedDocument):
             "Only these are checksummed here, and only these reach dvc.lock."
         ),
     )
+    cpu_dependent_numeric_artifacts: tuple[CpuDependentNumericArtifact, ...] = Field(
+        default=(),
+        description=(
+            "Files whose structure is a pure function of the pipeline's "
+            "inputs but whose floating-point values follow the CPU. Pinned "
+            "here by structure_sha256 — which is exact and portable — while "
+            "the raw byte digest goes to the artifact-integrity sidecar and "
+            "the values are held to a declared tolerance by comparison. "
+            "See DEC-106."
+        ),
+    )
     execution_specific_artifacts: dict[str, str] = Field(
         default_factory=dict,
         description=(
@@ -519,6 +805,7 @@ class DeterministicStageRecord(_VersionedDocument):
     disclaimers: tuple[str, ...]
     determinism_note: str = DETERMINISTIC_DOCUMENT_NOTE
     execution_specific_note: str = EXECUTION_SPECIFIC_NOTE
+    cpu_dependent_numeric_note: str = CPU_DEPENDENT_NUMERIC_NOTE
     note: str = NO_INFLATION_NOTE
 
     @model_validator(mode="after")
@@ -541,22 +828,31 @@ class DeterministicStageRecord(_VersionedDocument):
         paths = [artifact.path for artifact in self.deterministic_artifacts]
         if len(set(paths)) != len(paths):
             raise ValueError("a deterministic artifact is listed more than once")
-        for label, other in (
-            ("volatile", set(self.volatile_artifacts)),
-            ("execution-specific", set(self.execution_specific_artifacts)),
-        ):
-            overlap = set(paths) & other
-            if overlap:
-                raise ValueError(
-                    f"{sorted(overlap)} are listed as both deterministic and "
-                    f"{label}; a file has exactly one classification"
-                )
-        both = set(self.volatile_artifacts) & set(self.execution_specific_artifacts)
-        if both:
+        numeric_paths = [
+            artifact.path for artifact in self.cpu_dependent_numeric_artifacts
+        ]
+        if len(set(numeric_paths)) != len(numeric_paths):
             raise ValueError(
-                f"{sorted(both)} are listed as both volatile and "
-                "execution-specific; a file has exactly one classification"
+                "a cpu-dependent numeric artifact is listed more than once"
             )
+        # Four classifications, and a file has exactly one. Checked
+        # pairwise rather than by convention: a file in two classes would
+        # be pinned by one rule and excused by another, which is the kind
+        # of ambiguity that lets an unstable output hide.
+        classes: tuple[tuple[str, set[str]], ...] = (
+            ("portable deterministic", set(paths)),
+            ("cpu-dependent numeric", set(numeric_paths)),
+            ("execution-specific", set(self.execution_specific_artifacts)),
+            ("volatile", set(self.volatile_artifacts)),
+        )
+        for index, (label, members) in enumerate(classes):
+            for other_label, others in classes[index + 1 :]:
+                overlap = members & others
+                if overlap:
+                    raise ValueError(
+                        f"{sorted(overlap)} are listed as both {label} and "
+                        f"{other_label}; a file has exactly one classification"
+                    )
         for artifact in self.deterministic_artifacts:
             if is_serialized_estimator(artifact.path):
                 raise ValueError(
@@ -753,7 +1049,40 @@ class ModelVersionManifest(_VersionedDocument):
         description=(
             "Recorded SHA-256 of the byte-stable run documents this version "
             "depends on. The model file is deliberately absent: its digest is "
-            "execution-specific and lives in the integrity record."
+            "execution-specific and lives in the integrity record. A "
+            "CPU-dependent numerical document is absent too, for the same "
+            "class of reason; it appears in "
+            "referenced_structure_digests instead."
+        ),
+    )
+    numerical_portability_note: str = Field(
+        default=(
+            "MODEL VERSION IDENTITY DOES NOT CERTIFY NUMERICAL PORTABILITY. "
+            "This identifier covers provenance, configuration, data, and "
+            "code. referenced_structure_digests covers structure — schema, "
+            "ordering, dtypes, non-float values, labels, and missing-value "
+            "positions. NEITHER covers floating-point VALUES: a version is "
+            "derived from one run, so it has nothing to compare a number "
+            "against. Two executions whose scores differ far beyond the "
+            "declared tolerance can carry the same model_version_id and the "
+            "same structure digests. Cross-environment numerical "
+            "portability is established only by comparing against the "
+            "committed accepted references — 'engagevr numeric-check "
+            "--accepted' — and never by this record alone. See DEC-107."
+        ),
+        description="What this record does NOT establish about numbers.",
+    )
+    referenced_structure_digests: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Structure SHA-256 of the CPU-dependent numerical run documents "
+            "this version depends on — metrics.json above all. Exact and "
+            "portable: it covers schema, ordering, dtypes, every non-float "
+            "value, and every null position, and excludes only the "
+            "floating-point values, which follow the CPU's BLAS kernel. This "
+            "is what keeps one fitted model's identity stable across "
+            "machines while still changing when its structure does. "
+            "See DEC-106."
         ),
     )
 
@@ -800,7 +1129,9 @@ class ModelVersionManifest(_VersionedDocument):
             if not _SHA256.match(digest):
                 raise ValueError(f"{name} must be a lowercase SHA-256 digest")
         offending = sorted(
-            name for name in self.referenced_checksums if is_serialized_estimator(name)
+            name
+            for name in (*self.referenced_checksums, *self.referenced_structure_digests)
+            if is_serialized_estimator(name)
         )
         if offending:
             raise ValueError(
@@ -809,6 +1140,22 @@ class ModelVersionManifest(_VersionedDocument):
                 "execution-specific; record them in the artifact-integrity "
                 "sidecar instead."
             )
+        both = sorted(
+            set(self.referenced_checksums) & set(self.referenced_structure_digests)
+        )
+        if both:
+            raise ValueError(
+                f"{both} are referenced both by exact checksum and by "
+                "structure digest. A document is one or the other: pinning a "
+                "CPU-dependent numerical document by its raw bytes is the "
+                "defect DEC-106 removes."
+            )
+        for name, digest in self.referenced_structure_digests.items():
+            if not _SHA256.match(digest):
+                raise ValueError(
+                    f"referenced_structure_digests[{name!r}] must be a "
+                    "lowercase SHA-256 digest"
+                )
         if not self.disclaimers:
             raise ValueError(
                 "a model-version manifest must carry at least one disclaimer"
@@ -856,6 +1203,14 @@ class ReproducibilityStage(BaseModel):
         ),
     )
     deterministic_artifacts: tuple[DeterministicArtifact, ...] = ()
+    cpu_dependent_numeric_artifacts: tuple[CpuDependentNumericArtifact, ...] = Field(
+        default=(),
+        description=(
+            "Files pinned by an exact structure digest because their "
+            "floating-point values follow the CPU. Their raw digests are in "
+            "the stage's artifact-integrity record. See DEC-106."
+        ),
+    )
     execution_specific_artifacts: dict[str, str] = Field(
         default_factory=dict,
         description=(
@@ -895,6 +1250,22 @@ class ReproducibilityStage(BaseModel):
                     f"{artifact.path!r} is a serialized Python estimator and "
                     "cannot be part of a portable deterministic identity"
                 )
+        exact = {artifact.path for artifact in self.deterministic_artifacts}
+        numeric = {artifact.path for artifact in self.cpu_dependent_numeric_artifacts}
+        classes: tuple[tuple[str, set[str]], ...] = (
+            ("portable deterministic", exact),
+            ("cpu-dependent numeric", numeric),
+            ("execution-specific", set(self.execution_specific_artifacts)),
+            ("volatile", set(self.volatile_artifacts)),
+        )
+        for index, (label, members) in enumerate(classes):
+            for other_label, others in classes[index + 1 :]:
+                overlap = members & others
+                if overlap:
+                    raise ValueError(
+                        f"{sorted(overlap)} are listed as both {label} and "
+                        f"{other_label}; a file has exactly one classification"
+                    )
         return self
 
 
@@ -924,9 +1295,34 @@ class ReproducibilityManifest(_VersionedDocument):
     logical_fingerprint: str = Field(min_length=64, max_length=64)
     logical_fingerprint_algorithm: str = "sha256"
     logical_fingerprint_inputs: str = (
-        "stage names, kinds, commands, logical identities, and the "
+        "stage names, kinds, commands, logical identities, the "
         "pipeline-relative path plus SHA-256 of every artifact declared "
-        "deterministic."
+        "byte-deterministic, and the pipeline-relative path plus structure "
+        "SHA-256 of every artifact declared cpu-dependent numeric."
+    )
+    exact_byte_reproducibility: str = Field(
+        default=(
+            "Artifacts listed under deterministic_artifacts reproduce "
+            "BYTE FOR BYTE from the same source, locked dependencies, "
+            "configuration, seed, and parameters — on any machine. Their "
+            "SHA-256 is the digest of the real bytes."
+        ),
+        description="What byte reproducibility means here, stated separately.",
+    )
+    numerical_portability: str = Field(
+        default=(
+            "Artifacts listed under cpu_dependent_numeric_artifacts do NOT "
+            "reproduce byte for byte across CPUs, and this document does not "
+            "claim they do. What reproduces exactly is their STRUCTURE — "
+            "schema, ordering, dtypes, non-float values, predicted labels, "
+            "and the positions of missing and non-finite values — pinned by "
+            "structure_sha256. Their floating-point values are held to a "
+            "declared engineering portability tolerance by COMPARISON "
+            "against a reference, not by any digest. This is numerical "
+            "portability; it is not byte reproducibility, and the two are "
+            "reported separately on purpose. See DEC-106."
+        ),
+        description="What numerical portability means here, and what it is not.",
     )
     excluded_from_identity: tuple[str, ...] = (
         "wall-clock time, which appears nowhere in this document",
@@ -937,6 +1333,12 @@ class ReproducibilityManifest(_VersionedDocument):
         "describes one execution's heap and libraries rather than the "
         "experiment, and which is recorded in an artifact-integrity record "
         "beside the pipeline instead",
+        "the RAW SHA-256 of every cpu-dependent numerical artifact, which "
+        "follows the CPU's BLAS kernel rather than the experiment; its "
+        "exact structure digest participates instead, and the raw digest is "
+        "recorded in an artifact-integrity record",
+        "the size in bytes of every cpu-dependent numerical artifact, "
+        "because a one-ULP change alters a float's decimal rendering length",
         "MLflow run and experiment identifiers",
         "host platform, machine name, and process identifier",
     )
@@ -946,6 +1348,7 @@ class ReproducibilityManifest(_VersionedDocument):
     disclaimers: tuple[str, ...]
     determinism_note: str = DETERMINISTIC_DOCUMENT_NOTE
     execution_specific_note: str = EXECUTION_SPECIFIC_NOTE
+    cpu_dependent_numeric_note: str = CPU_DEPENDENT_NUMERIC_NOTE
     note: str = NO_INFLATION_NOTE
 
     @model_validator(mode="after")
@@ -1427,6 +1830,7 @@ class SmokeReport(_VersionedDocument):
 
 
 __all__ = [
+    "CPU_DEPENDENT_NUMERIC_NOTE",
     "DETERMINISTIC_DOCUMENT_NOTE",
     "DRIFT_INTERPRETATION_NOTE",
     "FORBIDDEN_STATUS_WORDS",
@@ -1437,6 +1841,7 @@ __all__ = [
     "REQUIRED_TRACKING_TAGS",
     "SUPPORTED_MLOPS_SCHEMA_VERSIONS",
     "ConfigurationVersion",
+    "CpuDependentNumericArtifact",
     "DeterministicArtifact",
     "DeterministicStageRecord",
     "DriftDatasetReference",
@@ -1449,6 +1854,8 @@ __all__ = [
     "FeatureDriftResult",
     "MLOpsRunSummary",
     "ModelVersionManifest",
+    "NumericReference",
+    "NumericReferenceManifest",
     "ReproducibilityManifest",
     "ReproducibilityStage",
     "SmokeCheckResult",

@@ -26,11 +26,24 @@ The boundary
 The record pins the stage's logical identity and checksums every file the
 stage produced whose bytes are a pure function of the pipeline's inputs.
 
-Three classifications, not two
--------------------------------
+Four classifications, not two
+------------------------------
 ``portable_deterministic``
     Checksummed here.  Its bytes follow from the source, the locked
     dependencies, the configuration, the seed, and the parameters.
+
+``cpu_dependent_numeric``
+    Pinned here by an exact **structure digest** and never by its raw
+    bytes.  A model-derived document is the case: numpy and scipy ship
+    OpenBLAS built ``DYNAMIC_ARCH``, so a different CPU selects a
+    different kernel, sums a dot product in a different order, and moves
+    the last bits of every fitted coefficient and everything derived from
+    it.  What does *not* move is the schema, the ordering, the dtypes,
+    the predicted labels, the integer counts, and the positions of
+    missing and non-finite values — so those are digested exactly, and
+    the floats are held to a declared tolerance by comparison instead.
+    The raw digest goes to the artifact-integrity sidecar, where it still
+    detects corruption and tampering.  See DEC-106.
 
 ``execution_specific``
     Listed by path and reason, **without a checksum**.  A serialized
@@ -69,11 +82,20 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from engagevr.mlops.fingerprints import sha256_payload
+from engagevr.mlops.numeric_contract import (
+    DEFAULT_TOLERANCE,
+    structure_digest,
+)
+from engagevr.mlops.numeric_contract import (
+    is_supported as numeric_contract_supports,
+)
 from engagevr.schemas.experiments import SELF_CHECK_DISCLAIMER
 from engagevr.schemas.mlops import (
+    CPU_DEPENDENT_NUMERIC_NOTE,
     MLOPS_DISCLAIMER,
     SERIALIZED_ESTIMATOR_SUFFIXES,
     ArtifactIntegrityEntry,
+    CpuDependentNumericArtifact,
     DeterministicArtifact,
     DeterministicStageRecord,
     is_serialized_estimator,
@@ -129,6 +151,92 @@ EXECUTION_SPECIFIC_MODEL_REASON = (
 )
 
 
+#: The shared mechanism, stated once and referenced by every entry below.
+MODEL_DERIVED_NUMERIC_REASON = (
+    "is a model-derived document: its floating-point values are computed "
+    "from fitted estimators. numpy and scipy ship OpenBLAS built "
+    "DYNAMIC_ARCH, so a different CPU selects a different kernel, sums a "
+    "dot product in a different order, and moves the last bits of every "
+    "derived value. Its structure — schema, ordering, dtypes, non-float "
+    "values, labels, and missing-value positions — is pinned exactly by "
+    "structure_sha256, and its raw digest is recorded in the "
+    "artifact-integrity execution sidecar."
+)
+
+#: Model-derived documents whose floats follow the CPU, and the evidence.
+#:
+#: Keyed by the **exact pipeline-relative path**, not by file name.  The
+#: distinction matters: a basename allowlist would hand this
+#: classification to any future artifact that happened to be called
+#: ``metrics.json``, and that artifact would then be excused from byte
+#: identity without anybody having measured it.  Membership here means
+#: *this file, at this path, was observed to differ between two
+#: environments* — specifically between the machine that committed
+#: ``dvc.lock`` and the GitHub runner of CI run 34403534631, where these
+#: ten and no others moved.
+#:
+#: Nothing is listed on suspicion.  The same runs' other outputs —
+#: ``splits.json``, ``calibration.json``, ``ablations.json``,
+#: ``feature_catalog.json``, ``coverage_curve.json``,
+#: ``uncertainty_config.json``, the datasets, and the dataset feature
+#: catalogues — were byte-identical across both environments and every
+#: BLAS kernel tested, and they stay portable deterministic.
+#:
+#: The paths embed the pipeline target (``engagement_class``, from
+#: ``params.yaml``).  Changing the target changes the paths, so the new
+#: artifacts arrive unclassified and are treated as portable
+#: deterministic — which fails loudly rather than silently inheriting an
+#: exemption measured for a different run.  That is the intended
+#: behaviour.  See DEC-106 and DEC-107.
+CPU_DEPENDENT_NUMERIC_REASONS: dict[str, str] = {
+    "experiments/baseline-engagement_class/metrics.json": (
+        f"{MODEL_DERIVED_NUMERIC_REASON} Cross-validated scores for the "
+        "Milestone 5 baseline stage."
+    ),
+    "experiments/baseline-engagement_class/predictions.parquet": (
+        f"{MODEL_DERIVED_NUMERIC_REASON} Per-window predicted "
+        "probabilities for the baseline stage; the predicted labels, "
+        "identifiers, and fold indices do not move, only the "
+        "probabilities."
+    ),
+    "experiments/baseline-engagement_class/feature_importance.parquet": (
+        f"{MODEL_DERIVED_NUMERIC_REASON} Coefficients and permutation "
+        "importances for the baseline stage; the feature names and their "
+        "ordering do not move, only the importance values."
+    ),
+    "experiments/uncertainty-engagement_class/metrics.json": (
+        f"{MODEL_DERIVED_NUMERIC_REASON} Cross-validated scores for the "
+        "Milestone 7 uncertainty stage."
+    ),
+    "experiments/uncertainty-engagement_class/predictions.parquet": (
+        f"{MODEL_DERIVED_NUMERIC_REASON} Per-window calibrated "
+        "probabilities for the uncertainty stage."
+    ),
+    "experiments/uncertainty-engagement_class/selective_metrics.json": (
+        f"{MODEL_DERIVED_NUMERIC_REASON} Selective-prediction scores at "
+        "each operating point, computed from those probabilities."
+    ),
+    "experiments/uncertainty-engagement_class/selective_predictions.parquet": (
+        f"{MODEL_DERIVED_NUMERIC_REASON} Retained and abstained rows; the "
+        "abstention reason codes and decisions do not move, only the "
+        "underlying confidence values."
+    ),
+    "experiments/uncertainty-engagement_class/thresholds.json": (
+        f"{MODEL_DERIVED_NUMERIC_REASON} Confidence, margin, and "
+        "interval-width thresholds derived from those probabilities."
+    ),
+    "experiments/uncertainty-engagement_class/uncertainty.json": (
+        f"{MODEL_DERIVED_NUMERIC_REASON} Calibrated confidence, conformal "
+        "interval widths, and coverage."
+    ),
+    "experiments/uncertainty-engagement_class/adaptation_gate.parquet": (
+        f"{MODEL_DERIVED_NUMERIC_REASON} Per-window gate evidence; the "
+        "gate decisions and reason codes do not move, only the confidence "
+        "and interval-width values."
+    ),
+}
+
+
 class StageRecordError(ValueError):
     """A deterministic stage record could not be built."""
 
@@ -159,6 +267,30 @@ def volatile_reason(relative: str) -> str:
     if name.endswith(VOLATILE_DATASET_SUFFIX):
         return VOLATILE_DATASET_REASON
     raise StageRecordError(f"{relative} is not a known volatile artifact")
+
+
+def is_cpu_dependent_numeric(relative: str) -> bool:
+    """Whether this exact path names a measured CPU-dependent document.
+
+    Matched on the **whole pipeline-relative path**, never on the file
+    name.  A basename test would give the exemption to any future
+    artifact called ``metrics.json`` — under a different stage, a
+    different target, or a directory that does not exist yet — none of
+    which has been measured.  A file this repository has not measured at
+    this exact path is **not** in this class, so it is checksummed and
+    fails the reproduction test loudly if it turns out to vary.
+    """
+    return relative in CPU_DEPENDENT_NUMERIC_REASONS
+
+
+def cpu_dependent_numeric_reason(relative: str) -> str:
+    """Why a CPU-dependent numerical artifact's raw digest is not identity."""
+    try:
+        return CPU_DEPENDENT_NUMERIC_REASONS[relative]
+    except KeyError:  # pragma: no cover - callers check membership first
+        raise StageRecordError(
+            f"{relative} is not a known cpu-dependent numerical artifact"
+        ) from None
 
 
 def is_execution_specific(relative: str) -> bool:
@@ -220,11 +352,15 @@ class StageClassification(NamedTuple):
 
     #: Checksummed into the record, and therefore into ``dvc.lock``.
     deterministic: tuple[DeterministicArtifact, ...]
+    #: Pinned by an exact structure digest; raw digests live in
+    #: :attr:`integrity`. See DEC-106.
+    cpu_numeric: tuple[CpuDependentNumericArtifact, ...]
     #: Path to reason. Real digests live in :attr:`integrity`.
     execution_specific: dict[str, str]
     #: Path to reason. Timestamped provenance; never checksummed anywhere.
     volatile: dict[str, str]
-    #: The actual SHA-256 of every execution-specific file.
+    #: The actual SHA-256 of every execution-specific and cpu-dependent
+    #: numerical file. Nothing loses its real digest; it moves.
     integrity: tuple[ArtifactIntegrityEntry, ...]
 
 
@@ -240,6 +376,7 @@ def classify(targets: list[Path], root: Path) -> StageClassification:
     guarantee in silence.
     """
     deterministic: list[DeterministicArtifact] = []
+    cpu_numeric: list[CpuDependentNumericArtifact] = []
     execution_specific: dict[str, str] = {}
     integrity: list[ArtifactIntegrityEntry] = []
     volatile: dict[str, str] = {}
@@ -265,6 +402,37 @@ def classify(targets: list[Path], root: Path) -> StageClassification:
                     )
                 )
                 continue
+            if is_cpu_dependent_numeric(relative):
+                reason = cpu_dependent_numeric_reason(relative)
+                if not numeric_contract_supports(relative):
+                    raise StageRecordError(
+                        f"{relative} is classified cpu-dependent numeric but "
+                        "the numerical contract cannot read its format, so "
+                        "its structure cannot be pinned and its values "
+                        "cannot be compared. An artifact that cannot be "
+                        "checked must not be excused from byte identity."
+                    )
+                cpu_numeric.append(
+                    CpuDependentNumericArtifact(
+                        path=relative,
+                        structure_sha256=structure_digest(path),
+                        excluded_from_portable_identity=reason,
+                        atol=DEFAULT_TOLERANCE.atol,
+                        rtol=DEFAULT_TOLERANCE.rtol,
+                        numeric_tolerance=DEFAULT_TOLERANCE.describe(),
+                    )
+                )
+                # The raw digest is not lost; it moves. Corruption and
+                # tampering are still detectable against this entry.
+                integrity.append(
+                    ArtifactIntegrityEntry(
+                        path=relative,
+                        sha256=sha256_file(path),
+                        size_bytes=path.stat().st_size,
+                        excluded_from_portable_identity=reason,
+                    )
+                )
+                continue
             deterministic.append(
                 DeterministicArtifact(
                     path=relative,
@@ -273,9 +441,11 @@ def classify(targets: list[Path], root: Path) -> StageClassification:
                 )
             )
     deterministic.sort(key=lambda artifact: artifact.path)
+    cpu_numeric.sort(key=lambda artifact: artifact.path)
     integrity.sort(key=lambda entry: entry.path)
     return StageClassification(
         deterministic=tuple(deterministic),
+        cpu_numeric=tuple(cpu_numeric),
         execution_specific=dict(sorted(execution_specific.items())),
         volatile=dict(sorted(volatile.items())),
         integrity=tuple(integrity),
@@ -329,6 +499,7 @@ def build_stage_record(
     if not any(
         (
             classification.deterministic,
+            classification.cpu_numeric,
             classification.execution_specific,
             classification.volatile,
         )
@@ -343,6 +514,7 @@ def build_stage_record(
         command=normalize_command(command, root),
         logical_identity=logical_identity,
         deterministic_artifacts=classification.deterministic,
+        cpu_dependent_numeric_artifacts=classification.cpu_numeric,
         execution_specific_artifacts=classification.execution_specific,
         volatile_artifacts=classification.volatile,
         engagevr_version=engagevr_version(),
@@ -384,6 +556,14 @@ def record_digest(record: DeterministicStageRecord) -> str:
                 (artifact.path, artifact.sha256)
                 for artifact in record.deterministic_artifacts
             ],
+            # Structure digests, never raw digests: the exact part of a
+            # CPU-dependent numerical artifact still participates in the
+            # stage's identity, so a changed schema, a reordered row, or
+            # a different predicted label still propagates to dvc.lock.
+            "cpu_dependent_numeric_artifacts": [
+                (artifact.path, artifact.structure_sha256)
+                for artifact in record.cpu_dependent_numeric_artifacts
+            ],
         }
     )
 
@@ -393,8 +573,16 @@ def artifact_map(record: DeterministicStageRecord) -> Mapping[str, str]:
     return {a.path: a.sha256 for a in record.deterministic_artifacts}
 
 
+def structure_map(record: DeterministicStageRecord) -> Mapping[str, str]:
+    """Pipeline-relative path to structure SHA-256, for the numeric artifacts."""
+    return {a.path: a.structure_sha256 for a in record.cpu_dependent_numeric_artifacts}
+
+
 __all__ = [
+    "CPU_DEPENDENT_NUMERIC_NOTE",
+    "CPU_DEPENDENT_NUMERIC_REASONS",
     "EXECUTION_SPECIFIC_MODEL_REASON",
+    "MODEL_DERIVED_NUMERIC_REASON",
     "SERIALIZED_ESTIMATOR_SUFFIXES",
     "VOLATILE_ARTIFACT_REASONS",
     "VOLATILE_DATASET_REASON",
@@ -404,14 +592,17 @@ __all__ = [
     "artifact_map",
     "build_stage_record",
     "classify",
+    "cpu_dependent_numeric_reason",
     "dataset_identity",
     "execution_specific_reason",
+    "is_cpu_dependent_numeric",
     "is_execution_specific",
     "is_volatile",
     "normalize_command",
     "read_stage_record",
     "record_digest",
     "run_identity",
+    "structure_map",
     "volatile_reason",
     "write_stage_record",
 ]

@@ -763,7 +763,12 @@ class TestModelArtifactIntegrityIsPreserved:
         directory, versions, _integrity = model_versions_with_integrity
         record = read_artifact_integrity(integrity_sidecar_path(directory))
         recorded = {entry.path for entry in record.artifacts}
-        assert recorded == {v.model_artifact_path for v in versions}
+        # Every model file, and since DEC-106 the CPU-dependent numerical
+        # documents the versions reference as well: both classes lost
+        # their place in portable identity, so both keep their real
+        # digest here or nowhere.
+        assert recorded >= {v.model_artifact_path for v in versions}
+        assert "metrics.json" in recorded
         for entry in record.artifacts:
             assert len(entry.sha256) == 64
             assert entry.size_bytes > 0
@@ -777,9 +782,12 @@ class TestModelArtifactIntegrityIsPreserved:
         integrity = ArtifactIntegrityRecord.model_validate(
             json.loads(integrity_sidecar_path(stage.record).read_text(encoding="utf-8"))
         )
+        # Exactly the two classes that are excluded from portable byte
+        # identity, and nothing else: an artifact is either pinned by its
+        # bytes in the record or digested here, never neither.
         assert {e.path for e in integrity.artifacts} == set(
             record.execution_specific_artifacts
-        )
+        ) | {a.path for a in record.cpu_dependent_numeric_artifacts}
         for entry in integrity.artifacts:
             assert entry.sha256 == _sha256(layout.root / entry.path)
 
@@ -989,6 +997,163 @@ class TestLogicalModelVersionIdentity:
             assert version.is_synthetic is True
             for word in ("production", "champion", "approved", "validated"):
                 assert word not in version.model_version_id.lower()
+
+
+class TestModelVersionIdentityUnderTheNumericContract:
+    """DEC-106 extended to model versions: structure pins, floats do not.
+
+    ``metrics.json`` is a document of fitted scores.  Referencing it by
+    raw digest renamed the *same fitted model* on a machine whose BLAS
+    kernel rounds differently, which is DEC-105's defect one layer up.
+    It is referenced by structure digest instead.
+    """
+
+    def _versions(self, run: Path) -> dict[str, Any]:
+        return {
+            v.model_name: v for v in build_model_versions(run, config=load_config())
+        }
+
+    def _copy(self, tmp_path: Path, source: Path) -> Path:
+        import shutil
+
+        run = tmp_path / "run"
+        shutil.copytree(source, run)
+        return run
+
+    def _nudge_metrics(self, run: Path, *, delta: float) -> None:
+        """Move every float in metrics.json by ``delta``, as a CPU would."""
+        path = run / "metrics.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+
+        def walk(node: Any) -> Any:
+            if isinstance(node, bool):
+                return node
+            if isinstance(node, float):
+                return node + delta
+            if isinstance(node, dict):
+                return {key: walk(value) for key, value in node.items()}
+            if isinstance(node, list):
+                return [walk(value) for value in node]
+            return node
+
+        path.write_text(json.dumps(walk(document), indent=2), encoding="utf-8")
+
+    def test_metrics_is_referenced_by_structure_not_by_raw_bytes(
+        self, model_versions_with_integrity: tuple[Path, Any, Any]
+    ) -> None:
+        _directory, versions, _integrity = model_versions_with_integrity
+        for version in versions:
+            assert "metrics.json" not in version.referenced_checksums
+            assert "metrics.json" in version.referenced_structure_digests
+
+    def test_the_exact_documents_are_still_referenced_by_raw_bytes(
+        self, model_versions_with_integrity: tuple[Path, Any, Any]
+    ) -> None:
+        # splits.json and feature_catalog.json reproduce byte for byte on
+        # every CPU measured. They keep the strict rule.
+        _directory, versions, _integrity = model_versions_with_integrity
+        for version in versions:
+            assert "splits.json" in version.referenced_checksums
+            assert "feature_catalog.json" in version.referenced_checksums
+
+    def test_the_identifier_is_stable_within_the_declared_tolerance(
+        self, tmp_path: Path, m10_baseline_run: Path
+    ) -> None:
+        run = self._copy(tmp_path, m10_baseline_run)
+        before = _identifiers(run)
+        before_structures = {
+            name: v.referenced_structure_digests.get("metrics.json")
+            for name, v in self._versions(run).items()
+        }
+        self._nudge_metrics(run, delta=1e-12)
+        after = _identifiers(run)
+        after_structures = {
+            name: v.referenced_structure_digests.get("metrics.json")
+            for name, v in self._versions(run).items()
+        }
+        assert after == before, (
+            "a last-bit change in a fitted score must not rename the model"
+        )
+        assert after_structures == before_structures
+
+    def test_a_structural_change_to_metrics_changes_the_reference(
+        self, tmp_path: Path, m10_baseline_run: Path
+    ) -> None:
+        run = self._copy(tmp_path, m10_baseline_run)
+        before = self._versions(run)["logistic_regression-fold0"]
+        path = run / "metrics.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["fold_count"] = 99
+        path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+        after = self._versions(run)["logistic_regression-fold0"]
+        assert (
+            after.referenced_structure_digests["metrics.json"]
+            != before.referenced_structure_digests["metrics.json"]
+        ), "an integer is not a float; a changed count must propagate"
+
+    def test_verification_still_detects_a_structural_change(
+        self, tmp_path: Path, m10_baseline_run: Path
+    ) -> None:
+        run = self._copy(tmp_path, m10_baseline_run)
+        version = self._versions(run)["logistic_regression-fold0"]
+        integrity = build_model_artifact_integrity([version], run)
+        assert (
+            verify_model_version(version, run_directory=run, integrity=integrity) == ()
+        )
+        path = run / "metrics.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["run_id"] = "a-different-run"
+        path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+        assert "metrics.json" in verify_model_version(
+            version, run_directory=run, integrity=integrity
+        )
+
+    def test_verification_still_detects_a_truncated_metrics_document(
+        self, tmp_path: Path, m10_baseline_run: Path
+    ) -> None:
+        run = self._copy(tmp_path, m10_baseline_run)
+        version = self._versions(run)["logistic_regression-fold0"]
+        integrity = build_model_artifact_integrity([version], run)
+        (run / "metrics.json").write_text("{not json", encoding="utf-8")
+        assert "metrics.json" in verify_model_version(
+            version, run_directory=run, integrity=integrity
+        )
+
+    def test_the_raw_metrics_digest_is_still_recorded_in_the_integrity_record(
+        self, model_versions_with_integrity: tuple[Path, Any, Any]
+    ) -> None:
+        # The digest moved; it was not deleted. Corruption of metrics.json
+        # is still detectable byte for byte on the machine that wrote it.
+        _directory, _versions, integrity = model_versions_with_integrity
+        recorded = {entry.path for entry in integrity}
+        assert "metrics.json" in recorded
+
+    def test_a_beyond_tolerance_change_is_caught_by_comparison_not_by_the_id(
+        self, tmp_path: Path, m10_baseline_run: Path
+    ) -> None:
+        # An honest boundary. A model version is derived from ONE run, so
+        # it has nothing to compare a float against and cannot, by
+        # itself, notice that a score moved. Detecting that needs a
+        # reference execution, which is what `engagevr numeric-check`
+        # supplies and what CI runs. Asserted here so the limit is a
+        # tested fact rather than an assumption. See DEC-106.
+        from engagevr.mlops.numeric_contract import compare_artifacts
+
+        run = self._copy(tmp_path, m10_baseline_run)
+        reference_metrics = run / "metrics.json"
+        original = reference_metrics.read_bytes()
+        before = _identifiers(run)
+
+        self._nudge_metrics(run, delta=1e-3)
+        after = _identifiers(run)
+        assert after == before, "documented: the identifier alone cannot see this"
+
+        moved = tmp_path / "moved-metrics.json"
+        moved.write_bytes(reference_metrics.read_bytes())
+        reference = tmp_path / "reference-metrics.json"
+        reference.write_bytes(original)
+        differences = compare_artifacts(reference, moved)
+        assert differences, "the comparison must see what the identifier cannot"
 
 
 class TestNothingRewritesTheLock:
