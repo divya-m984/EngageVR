@@ -1,20 +1,40 @@
 # EngageVR -- Progress Tracker
 
-## Current Milestone: 10 -- MLOps and Packaging
+## Current Status: Planned milestones complete (M0-M11)
 
-**Status:** Milestone 10 implementation **locally complete**; GitHub-hosted CI
-acceptance **pending corrected branch push**. Two CI runs have failed a
-cross-environment reproducibility check, each for a different cause, and
-each cause was established by measurement and corrected: serialized
-estimator bytes on PR #9 (DEC-105), and CPU-dependent floating-point
-arithmetic on PR #10 (DEC-106); an audit then closed a fail-open hole in
-the second repair's own check (DEC-107). The definitive test is the next
-run.
-Scientific evaluation and human-subject validation remain pending.
-Nothing in this milestone produces evidence: reproducibility is not
-validity, tracking is not validation, registration is not approval,
-packaging is not production readiness, and drift alerts are engineering
-diagnostics.
+**Status:** every milestone in `docs/PROJECT_PLAN.md` is complete, and
+Milestone 10's GitHub-hosted CI acceptance — the last outstanding criterion —
+**PASSED**. GitHub Actions run **34458482256** was green on all three jobs
+(system smoke and DVC reproducibility; Docker images and health checks; lint,
+types, and the full test suite), and PR #10 was merged into `main` as
+**5be09b7**.
+
+Getting there exposed **three CI failures plus one audit-detected gap**,
+followed by four corresponding corrections, none of which is being tidied
+away. In order: the PR #9 run failed on serialized-estimator byte
+instability (DEC-105); the first PR #10 run failed on CPU-dependent
+numerical variation across runner CPUs (DEC-106); an audit of that repair —
+not a CI run — found and closed a same-runner fail-open numerical check
+(DEC-107); and the second PR #10 run failed on a stale system-test
+expectation that still assumed the integrity sidecar held only model files.
+The final hosted run passed.
+
+**The scientific position is unchanged, and completing the schedule does not
+change it.** Every model-performance and evaluation result reported anywhere
+in this progress record was computed from synthetic data and is a software
+self-check, not evidence. No participant-labelled EngageVR dataset exists,
+no human-subject validation has been performed, and no institutional or
+ethical approval is claimed. No model is validated, approved, a champion, or
+production-ready. A model prediction is not ground truth. rPPG has not been
+validated against a physical reference, and physical-hardware and VR
+participant validation remain pending. Reproducibility is not validity,
+tracking is not validation, registration is not approval, packaging is not
+production readiness, and drift alerts are engineering diagnostics.
+
+What remains is not a milestone in this plan: it is the scientific work the
+plan was always explicit about deferring — institutional review, participant
+recruitment, real data collection, and the evaluations that no amount of
+software correctness can substitute for.
 
 ## Milestone History
 
@@ -1199,15 +1219,19 @@ configured interval, where it previously refreshed only on request.
 **Started:** 2026-08-29
 **Completed (implementation):** 2026-08-29
 **Corrected after CI:** 2026-08-31 (serialized estimator bytes, DEC-105);
-2026-09-10 (CPU-dependent numerical artifacts, DEC-106)
+2026-09-10 (CPU-dependent numerical artifacts, DEC-106; same-runner
+fail-open numerical check, DEC-107; stale system-test expectation)
+**GitHub-hosted CI accepted:** 2026-09-10, run **34458482256**
 
-**Status:** Milestone 10 implementation **locally complete**;
-GitHub-hosted CI acceptance **pending corrected branch push**. Three of the
-four PROJECT_PLAN acceptance criteria are met and verified locally; "CI
-passes" cannot be claimed -- the runs on PR #9 and PR #10 both **failed** a
-cross-environment reproducibility check, each is corrected below, and a
-fresh run is awaited. Scientific evaluation and human-subject validation
-remain PENDING and are unaffected by anything in this milestone.
+**Status:** Milestone 10 **COMPLETE**. All four PROJECT_PLAN acceptance
+criteria are met, and the last of them — "CI passes" — is settled by an
+actual GitHub-hosted run rather than by local verification: run
+**34458482256** was green on all three jobs, and PR #10 merged into `main`
+as **5be09b7**. Three cross-environment failures preceded it and are
+recorded below in full, because the corrections are the substance of this
+milestone. Scientific evaluation and human-subject validation remain
+PENDING and are unaffected by anything here: a green pipeline is a
+statement about software, not about evidence.
 
 **Objective (PROJECT_PLAN, verbatim):** "MLflow, DVC stages, Docker, GitHub
 Actions, model versioning, drift checks, system smoke tests, release
@@ -1215,15 +1239,17 @@ instructions."
 
 **Acceptance criteria (PROJECT_PLAN, verbatim):**
 - [x] Clean clone can reproduce the demo
-- [ ] CI passes -- workflow syntax and every command verified locally, and
-      **the last GitHub-hosted run FAILED** the cross-environment `dvc.lock`
-      check on PR #10, as the run before it did on PR #9. Both root causes
-      established by measurement and corrected (DEC-105, DEC-106);
-      **execution on GitHub-hosted runners pending corrected branch push**.
-      This may be marked complete only once GitHub Actions actually passes.
-      Note that PR #10's failing commit was documentation-only and that the
-      same inputs had passed on `main` 87 minutes earlier: the runner fleet
-      is heterogeneous, so this criterion is only settled by a real run.
+- [x] CI passes -- **GitHub Actions run 34458482256, all three jobs green**:
+      "System smoke and DVC reproducibility", "Docker images build and the
+      stack answers its health checks", and "Lint, types, and the full test
+      suite". PR #10 merged into `main` as `5be09b7`. This criterion was
+      deliberately held open until a real hosted run passed, because three
+      earlier runs did not: PR #9 failed on serialized-estimator bytes
+      (DEC-105) and PR #10 failed twice, first on CPU-dependent numerical
+      variation (DEC-106) and then on a stale system-test expectation. The
+      run that settles it followed `6291ca7` ("fix: harden cross-environment
+      MLOps reproducibility") and `aa916ee` ("test: align DVC integrity
+      checks with numeric artifacts").
 - [x] Model artifact and configuration are versioned
 - [x] Dockerized backend and dashboard work
 
@@ -1490,6 +1516,28 @@ separated from numerical portability in a required schema field, and
 `verify_model_version_portability` is the entry point that checks the
 numbers.
 
+*Fourth correction (stale test expectation), 2026-09-10.* Run 34454904631,
+after `6291ca7`, failed one remaining assertion:
+`tests/system/test_dvc_lock_stability.py::TestLockStability::test_every_model_checksum_survives_outside_the_lock`
+built its expectation from `models/*.joblib` alone, so it still assumed the
+integrity sidecar held only model files. The sidecar now correctly holds
+both excluded classes — 10 execution-specific plus 3 cpu-dependent numeric
+for `baseline`, and 0 plus 7 for `uncertainty` — so the test, not the
+implementation, was wrong. No production code changed. The assertion was
+split into six tests that derive the expected set from each stage's own
+record and assert **exact** equality with the union of the two classes,
+rather than being weakened to a subset. `aa916ee` records this.
+
+*GitHub-hosted CI accepted, 2026-09-10.* Run **34458482256** passed all
+three jobs, and PR #10 merged into `main` as **5be09b7**. That run is the
+first time the DEC-106/DEC-107 design was exercised on an actual GitHub
+runner rather than on a simulated CPU: the cross-environment `dvc.lock`
+check, the raw-integrity verification, the accepted-reference presence
+check, and the numerical-portability check against the committed references
+all passed in an execution environment independent of the development
+machine. The criterion was held open for exactly this evidence and is now
+met — as a software reproducibility result, not a scientific one.
+
 **Decisions recorded:** DEC-096 through DEC-107 (see `docs/DECISIONS.md`).
 DEC-100 was revised on 2026-08-29: `dvc.lock` is tracked **and byte-stable**,
 where an earlier revision accepted a lock that churned on every reproduction.
@@ -1508,27 +1556,40 @@ question DEC-105 explicitly left open.
 3. The drift layer has never been run against real data, real drift, or a
    real deployment. It has only ever compared two synthetic draws.
 4. Reproducibility was demonstrated on one machine, in one Linux container
-   that shares that machine's CPU, and across three simulated CPU
-   microarchitectures via `OPENBLAS_CORETYPE`. macOS, Windows, and ARM are
-   untested, and a real second machine remains the only decisive test.
+   that shares that machine's CPU, across three simulated CPU
+   microarchitectures via `OPENBLAS_CORETYPE`, and — since run
+   **34458482256** — on a GitHub-hosted runner: the first execution
+   environment independent of the development machine to satisfy the
+   repository's software reproducibility contract. That is a software
+   portability result, not a scientific replication. macOS, Windows, and ARM
+   remain untested, and the accepted numerical tolerance is calibrated only
+   on the x86-64 kernels measured so far.
 5. **Byte reproducibility of Python pickle/joblib artifacts is not assumed
    across execution environments.** A `.joblib` embeds uninitialised C
    struct padding; its checksum is execution-specific artifact integrity,
    not portable logical identity. Logical reproducibility is not serialized
    binary byte identity, and an artifact integrity checksum is not
    scientific validity.
-6. **Numerical portability across CPU microarchitectures is untested.** A
-   different BLAS kernel changes the last bits of `metrics.json`,
-   `predictions.parquet`, and `feature_importance.parquet`. Those artifacts
-   remain portable deterministic on purpose, so such a difference fails
-   loudly. Whether it occurs on GitHub's runners is unknown.
-7. The Docker images were built and health-checked locally. They have never
-   been run under load, over time, or by anyone else, and packaging is not
-   production readiness.
-8. CI's behaviour on GitHub-hosted runners cannot be proven from this
-   repository. **The PROJECT_PLAN criterion "CI passes" is therefore NOT
-   claimed**; the last CI run FAILED, and the criterion becomes claimable
-   only once the corrected branch is pushed and the workflow passes.
+6. **CPU-dependent numerical variation was observed, and is handled rather
+   than assumed away.** A different BLAS kernel changes the last bits of
+   `metrics.json`, `predictions.parquet`, `feature_importance.parquet`, and
+   seven other model-derived documents. DEC-106 pins their exact structure —
+   schema, ordering, dtypes, non-float values, labels, and missing-value
+   positions — and DEC-107 holds their floats to committed accepted
+   references under `atol = rtol = 1e-6`. GitHub-hosted run **34458482256**
+   satisfied that contract. The evidence covers the x86-64 kernels measured
+   here and that runner; **ARM, macOS, Windows, and arbitrary hardware are
+   not covered and nothing here generalises to them.** The tolerance is an
+   engineering portability allowance, not a scientific uncertainty interval
+   and not evidence about any model.
+7. The Docker images were built and health-checked locally **and in the
+   successful GitHub-hosted CI run**. They have never been run under load,
+   over time, or by anyone else, and packaging is not production readiness.
+8. CI's behaviour on GitHub-hosted runners is now a verified fact rather
+   than an assumption: run **34458482256** passed all three jobs — system
+   smoke and DVC reproducibility, Docker images and health checks, and
+   lint/types/full test suite. That is a statement about this software on
+   that runner, not about any scientific result.
 9. `mlflow-skinny`'s file store is in maintenance mode upstream. The `<4`
    bound is the guard; revisiting it is future work.
 10. No model is registered, promoted, approved, or validated, and no MLOps
@@ -1536,18 +1597,25 @@ question DEC-105 explicitly left open.
     correction was operational and changed no scientific status:
     `scientific_evaluation_eligible` remains `false` everywhere.
 
-**Remaining validation for this milestone:**
-1. Push the corrected branch and run the CI workflow on GitHub-hosted
-   runners. This is the one PROJECT_PLAN acceptance criterion still open,
-   and the previous attempt failed.
-2. If CI fails again, read the uploaded stage records: if the artifacts that
-   moved are `metrics.json`, `predictions.parquet`, or
-   `feature_importance.parquet` rather than the model files, the finding is
-   NUMERICAL portability across CPUs and must not be abstracted away.
-3. Reproduce the demo on a second operating system, a second CPU
-   microarchitecture, and a second Python build.
-4. Have somebody who did not write this milestone follow
-   `docs/RELEASE.md` end to end from a genuinely clean clone.
+**Further validation beyond the Milestone 10 acceptance criteria:**
+
+All four PROJECT_PLAN acceptance criteria are met. What follows is work
+nobody has done, not work the milestone still owes.
+
+1. Reproduce the demo on architectures the reproducibility contract has
+   never been exercised against — ARM (including Apple Silicon), macOS, and
+   Windows. The accepted numerical tolerance is calibrated on x86-64 kernels
+   only; a wider deviation elsewhere would fail the check loudly, which is
+   the intended behaviour and not a result anyone has observed yet.
+2. Run the Docker images under load and over time. Health checks answer that
+   a container started, not that it holds up.
+3. Have somebody who did not write this milestone follow `docs/RELEASE.md`
+   end to end from a genuinely clean clone, as an independent usability and
+   reproducibility check of the release procedure.
+4. Everything scientific. No number this milestone produces is evidence, and
+   participant-labelled evaluation, human-subject validation, and rPPG
+   validation against a physical reference all remain outstanding and are
+   untouched by any of the above.
 
 ### Milestone 11: Research Documentation
 
